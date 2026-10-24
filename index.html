@@ -1,0 +1,2157 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyPark – Atelier</title>
+<!--
+  MyPark – Atelier (18/10/2026) : modifier, supprimer et nettoyer les événements du patient depuis le PC.
+  21/10 : AJOUTER des événements (f_pc_ajouter), élan / tension, siestes, événements de santé, moments, suivis,
+  onglet Référentiels (f_pc_ref_enregistrer, comptes de t_admins) — script supabase_atelier_pc_v2.sql.
+  Fichier autonome : s'ouvre par double-clic dans le navigateur, aucune installation.
+  Toute écriture passe par les fonctions Supabase f_pc_modifier / f_pc_supprimer (script
+  app/src/main/java/com/cham/mypark2/core/database/sync/supabase_journal_pc.sql) : elles inscrivent le changement dans
+  t_sync_journal_pc, que le téléphone rejoue au rattrapage suivant (JournalPc.kt). Sans elles, le téléphone
+  écraserait les corrections. L'adresse et la clé Supabase restent dans CE navigateur (localStorage), jamais dans le fichier.
+-->
+<style>
+:root {
+  --fond: #f4f7f9; --carte: #ffffff; --encre: #13283a; --doux: #5a6b7a; --trait: #d9e2e8;
+  --accent: #2f6f8f; --accent-doux: #e3eff5; --danger: #b3261e; --danger-doux: #fbe9e7;
+  --modifie: #fff4d6; --ok: #2e7d4f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --fond: #10181f; --carte: #18232c; --encre: #e4edf3; --doux: #9db0bf; --trait: #2b3a46;
+    --accent: #7cc0e0; --accent-doux: #1f3442; --danger: #ff8a80; --danger-doux: #3a1f1d;
+    --modifie: #3b3420; --ok: #7fd4a0;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--fond); color: var(--encre); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--carte); border-bottom: 1px solid var(--trait); padding: 10px 16px; }
+h1 { font-size: 18px; margin: 0 12px 0 0; display: inline-block; }
+nav { display: inline-flex; gap: 4px; vertical-align: middle; }
+nav button { border: 0; background: transparent; color: var(--doux); padding: 8px 12px; border-radius: 8px; font: inherit; cursor: pointer; }
+nav button.actif { background: var(--accent-doux); color: var(--accent); font-weight: 600; }
+main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+.carte { background: var(--carte); border: 1px solid var(--trait); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+.ligne { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+label.champ { display: inline-flex; flex-direction: column; font-size: 12px; color: var(--doux); gap: 2px; }
+input, select, textarea { font: inherit; color: var(--encre); background: var(--fond); border: 1px solid var(--trait); border-radius: 6px; padding: 5px 7px; }
+input[type=number] { width: 80px; }
+input.large { width: 280px; }
+input.filtre-choix { width: 280px; margin-bottom: 2px; }
+select.choix-long { min-width: 280px; }
+button.btn { font: inherit; border: 1px solid var(--trait); background: var(--carte); color: var(--encre); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button.btn:hover { border-color: var(--accent); }
+button.principal { background: var(--accent); color: var(--carte); border-color: var(--accent); font-weight: 600; }
+button.danger { color: var(--danger); border-color: var(--danger); }
+button:disabled { opacity: .45; cursor: default; }
+.puce { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border: 1px solid var(--trait); border-radius: 999px; cursor: pointer; user-select: none; }
+.puce input { margin: 0; }
+.puce.active { background: var(--accent-doux); border-color: var(--accent); }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 12px; color: var(--doux); font-weight: 600; padding: 6px; border-bottom: 1px solid var(--trait); }
+td { padding: 6px; border-bottom: 1px solid var(--trait); vertical-align: top; }
+tr.modifiee td { background: var(--modifie); }
+tr.jour td { background: var(--accent-doux); font-weight: 600; color: var(--accent); }
+.type { white-space: nowrap; font-weight: 600; }
+.heure { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.champs { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+.multi { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 13px; color: var(--encre); }
+.discret { color: var(--doux); font-size: 13px; }
+.compteurs span { margin-right: 12px; }
+#message { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--encre); color: var(--carte); padding: 10px 16px; border-radius: 10px; display: none; max-width: 90vw; z-index: 10; }
+#message.erreur { background: var(--danger); }
+.cache { display: none !important; }
+h2 { font-size: 16px; margin: 0 0 8px; }
+h3 { font-size: 14px; margin: 14px 0 6px; }
+@media (max-width: 700px) { main { padding: 10px; } input.large { width: 100%; } }
+/* Vue journée (21/10) */
+body.large main { max-width: none; }
+.jr-corps { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 14px; align-items: start; }
+.jr-corps.sans-volet { grid-template-columns: minmax(0, 1fr); }
+.jr-volet { position: sticky; top: 70px; max-height: calc(100vh - 90px); overflow-y: auto; }
+.jr-volet .champs { flex-direction: column; }
+.jr-volet input.large { width: 100%; }
+.jr-resume { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 14px; }
+.jr-resume b { font-variant-numeric: tabular-nums; }
+.jr-grille { min-width: 900px; }
+.jr-couloir { display: grid; grid-template-columns: 140px minmax(0, 1fr); border-bottom: 1px solid var(--trait); }
+.jr-nom { font-size: 13px; font-weight: 600; padding: 6px 8px; color: var(--doux); }
+.jr-piste { position: relative; cursor: copy; background-image: linear-gradient(to right, var(--trait) 1px, transparent 1px); }
+.jr-heures .jr-piste { cursor: default; background: none; height: 22px; }
+.jr-heure { position: absolute; top: 2px; font-size: 12px; color: var(--doux); transform: translateX(-50%); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.jel { position: absolute; height: 26px; border-radius: 6px; font-size: 13px; line-height: 24px; padding: 0 6px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; cursor: grab; border: 1px solid rgba(0,0,0,.25); background: var(--carte); color: var(--encre);
+  user-select: none; touch-action: none; z-index: 1; }
+.jel.colore { color: #13283a; }
+.jel.point { width: 28px; padding: 0; text-align: center; border-radius: 50%; }
+.jel.pastille { width: 30px; padding: 0; text-align: center; border-radius: 50%; font-weight: 700; font-size: 11px; color: #fff; }
+.jel.prevue { border-style: dashed; opacity: .6; }
+.jel.aconfirmer { border: 2px solid var(--danger); }
+.jel.oubli { background: #9e9e9e !important; text-decoration: line-through; }
+.jel.modifie { outline: 3px solid #e0a800; }
+.jel.ouvert { box-shadow: 0 0 0 3px var(--accent); z-index: 2; }
+.jel.fixe { cursor: pointer; }
+.jel.glisse { opacity: .8; z-index: 4; cursor: grabbing; }
+/* Soins (21/10) */
+.so-ordo { border: 1px solid var(--trait); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.so-ordo.terminee { opacity: .6; }
+.so-ordo h3 { margin: 0 0 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.so-lig { padding: 6px 0 6px 12px; border-top: 1px dashed var(--trait); }
+.so-hor { display: inline-block; margin: 3px 6px 0 0; padding: 2px 8px; border-radius: 999px; background: var(--accent-doux); cursor: pointer; font-size: 13px; }
+.so-hor.ferme { background: transparent; border: 1px dashed var(--trait); text-decoration: line-through; color: var(--doux); }
+.cliquable { cursor: pointer; }
+.cliquable:hover { color: var(--accent); }
+.ouvert-so { box-shadow: 0 0 0 2px var(--accent); border-radius: 6px; }
+.jr-maintenant { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); z-index: 3; pointer-events: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🌷 MyPark – Atelier</h1>
+  <nav>
+    <button data-onglet="journee">Journée</button>
+    <button data-onglet="soins">Soins</button>
+    <button data-onglet="evenements" class="actif">Événements</button>
+    <button data-onglet="nettoyage">Nettoyage</button>
+    <button data-onglet="fiches">Fiches</button>
+    <button data-onglet="frappe">Tests</button>
+    <button data-onglet="referentiels">Référentiels</button>
+    <button data-onglet="connexion">Connexion</button>
+  </nav>
+</header>
+<main>
+
+<!-- ======================= CONNEXION ======================= -->
+<section id="connexion" class="cache">
+  <div class="carte">
+    <h2>Connexion à Supabase</h2>
+    <p class="discret">Adresse et clé : dans <code>local.properties</code> du projet (SUPABASE_URL, SUPABASE_ANON_KEY, la clé
+      « publishable »). Puis, comme dans l'app, votre e-mail et le code reçu : chaque compte ne voit que ses patients.
+      Tout reste enregistré dans ce navigateur seulement.</p>
+    <div class="ligne">
+      <label class="champ">Adresse<input id="cx-url" class="large" placeholder="https://xxxx.supabase.co"></label>
+      <label class="champ">Clé (publishable)<input id="cx-cle" class="large" type="password"></label>
+    </div>
+    <div class="ligne" style="margin-top:10px">
+      <label class="champ">Votre e-mail<input id="cx-mail" class="large" type="email"></label>
+      <button class="btn" id="cx-code-envoi">Recevoir un code</button>
+      <label class="champ">Code reçu<input id="cx-code" inputmode="numeric" style="width:120px"></label>
+      <button class="btn principal" id="cx-code-ok">Valider</button>
+    </div>
+    <div class="ligne" style="margin-top:10px">
+      <label class="champ">Patient<select id="cx-user"></select></label>
+      <button class="btn principal" id="cx-ok">Ouvrir</button>
+      <button class="btn" id="cx-sortir">Se déconnecter</button>
+      <span class="discret" id="cx-etat"></span>
+    </div>
+    <p class="discret">Prérequis : le script <code>supabase_journal_pc.sql</code> doit être passé (fonctions f_pc_modifier / f_pc_supprimer).
+      Les changements arrivent sur le téléphone au rattrapage suivant (ouverture de l'app, retour du réseau, ou Réglages → « Envoyer maintenant »).</p>
+  </div>
+</section>
+
+<!-- ======================= JOURNÉE ======================= -->
+<section id="journee" class="cache">
+  <div class="carte">
+    <div class="ligne">
+      <button class="btn" id="jr-prec" title="Jour précédent">◀</button>
+      <input type="date" id="jr-jour">
+      <button class="btn" id="jr-suiv" title="Jour suivant">▶</button>
+      <button class="btn" id="jr-auj">Aujourd'hui</button>
+      <button class="btn" id="jr-recharger" title="Relire depuis Supabase">↻ Recharger</button>
+      <strong id="jr-titre" style="margin-left:8px"></strong>
+      <span style="flex:1"></span>
+      <button class="btn principal" id="jr-enregistrer" disabled>💾 Enregistrer</button>
+      <button class="btn" id="jr-annuler" disabled>Annuler les changements</button>
+    </div>
+    <div class="ligne" id="jr-groupes" style="margin-top:10px"></div>
+    <div class="jr-resume" id="jr-resume"></div>
+  </div>
+  <div class="jr-corps sans-volet" id="jr-corps">
+    <div class="carte" style="overflow-x:auto">
+      <div id="jr-frise" class="discret">Choisissez un jour.</div>
+      <p class="discret" style="margin:8px 0 0">Cliquer sur un élément : le voir et le modifier. Le faire glisser : changer son heure
+        (pas de 5 min). Cliquer dans un couloir vide : y ajouter quelque chose à cette heure. Rien n'est envoyé avant « 💾 Enregistrer ».
+        La journée va du réveil au coucher, comme sur le téléphone.</p>
+    </div>
+    <aside class="carte jr-volet cache" id="jr-volet"></aside>
+  </div>
+</section>
+
+<!-- ======================= SOINS ======================= -->
+<section id="soins" class="cache">
+  <div class="carte">
+    <div class="ligne">
+      <span id="so-vues"></span>
+      <span style="flex:1"></span>
+      <label class="puce" id="so-anciens-puce"><input type="checkbox" id="so-anciens"> Voir aussi les terminées / passées</label>
+      <button class="btn" id="so-recharger">↻ Recharger</button>
+      <button class="btn principal" id="so-nouveau">＋ Nouveau</button>
+    </div>
+  </div>
+  <div class="jr-corps sans-volet" id="so-corps">
+    <div class="carte" id="so-liste">Connectez-vous d'abord.</div>
+    <aside class="carte jr-volet cache" id="so-volet"></aside>
+  </div>
+</section>
+
+<!-- ======================= ÉVÉNEMENTS ======================= -->
+<section id="evenements">
+  <div class="carte">
+    <div class="ligne">
+      <button class="btn" id="ev-prec" title="Jour précédent">◀</button>
+      <label class="champ">Du<input type="date" id="ev-du"></label>
+      <label class="champ">Au<input type="date" id="ev-au"></label>
+      <button class="btn" id="ev-suiv" title="Jour suivant">▶</button>
+      <button class="btn" id="ev-auj">Aujourd'hui</button>
+      <label class="champ">Rechercher<input id="ev-cherche" placeholder="mot, médicament…"></label>
+      <button class="btn principal" id="ev-charger">Charger</button>
+      <span style="flex:1"></span>
+      <label class="champ">Ajouter<select id="ev-type-ajout"></select></label>
+      <button class="btn" id="ev-ajouter">＋ Ajouter</button>
+    </div>
+    <div class="ligne" id="ev-types" style="margin-top:10px"></div>
+  </div>
+  <div class="carte">
+    <div class="ligne" style="justify-content:space-between">
+      <div class="compteurs discret" id="ev-compteurs">Choisissez une période puis « Charger ».</div>
+      <div class="ligne">
+        <button class="btn principal" id="ev-tout-enregistrer" disabled>💾 Enregistrer les modifications</button>
+        <button class="btn danger" id="ev-supprimer" disabled>🗑 Supprimer la sélection</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th><input type="checkbox" id="ev-tout"></th><th>Heure</th><th>Type</th><th>Détails (modifiables)</th><th></th></tr></thead>
+      <tbody id="ev-corps"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ======================= NETTOYAGE ======================= -->
+<section id="nettoyage" class="cache">
+  <div class="carte">
+    <div class="ligne">
+      <label class="champ">Sur les derniers<select id="nt-jours"><option>30</option><option selected>90</option><option>365</option></select></label>
+      <span class="discret">jours</span>
+      <button class="btn principal" id="nt-analyser">Analyser</button>
+    </div>
+  </div>
+  <div id="nt-resultats"></div>
+</section>
+
+<!-- ======================= FICHES ======================= -->
+<section id="fiches" class="cache">
+  <div class="carte">
+    <h2>Fiches de symptômes</h2>
+    <p class="discret">Titre, mots-clés (séparés par des virgules), icône, famille. Une fiche encore utilisée ne peut pas être supprimée.</p>
+    <table><thead><tr><th>Fiche</th><th>Saisies</th><th></th></tr></thead><tbody id="fi-sympt"></tbody></table>
+  </div>
+  <div class="carte">
+    <h2>Fiches d'activités personnelles</h2>
+    <table><thead><tr><th>Fiche</th><th>Saisies</th><th></th></tr></thead><tbody id="fi-act"></tbody></table>
+  </div>
+  <div class="carte">
+    <h2>Mes suivis</h2>
+    <p class="discret">Niveaux et ressentis : séparés par « | ». Heure : à partir de quand l'accueil le demande. Mots-clés (bilans) : activités concernées, séparés par des virgules.</p>
+    <table><thead><tr><th>Suivi</th><th>Notes</th><th></th></tr></thead><tbody id="fi-suivis"></tbody></table>
+  </div>
+</section>
+
+<!-- ======================= TEST DE FRAPPE (22/10) ======================= -->
+<section id="frappe" class="cache">
+  <div class="carte" style="max-width:760px">
+    <h2>⏱️ Test de frappe au clavier</h2>
+    <p>Recopiez la phrase, à votre vitesse habituelle, sans chercher à aller vite. Le chronomètre démarre à la première lettre ;
+      le test s'arrête à la fin de la phrase, sur « J'ai fini », ou au bout de 45 secondes.</p>
+    <p class="discret">Mêmes calculs que sur le téléphone (vitesse, erreurs, pauses de plus d'1,5 s, irrégularité). Le résultat est noté
+      « clavier du PC » : il ne se compare qu'aux autres tests faits sur le PC. Faites-le plutôt à la même heure chaque semaine,
+      au même moment par rapport à vos médicaments.</p>
+    <div id="fr-zone"></div>
+  </div>
+  <div class="carte" style="max-width:760px">
+    <h2>🎙️ Test de voix</h2>
+    <p>Asseyez-vous face à l'écran, à environ 50 cm du micro du PC, et lisez le texte à voix haute, normalement.</p>
+    <p class="discret">Rien n'est enregistré : le son est seulement mesuré pendant la lecture (volume moyen, part du temps parlé,
+      variation du volume, durée). Le navigateur demandera l'accès au micro. Le résultat est noté « micro du PC » : il ne se compare
+      qu'aux autres tests faits sur le PC, dans la même pièce, à la même distance.</p>
+    <div id="vx-zone"></div>
+  </div>
+</section>
+
+<!-- ======================= RÉFÉRENTIELS ======================= -->
+<section id="referentiels" class="cache">
+  <div class="carte">
+    <div class="ligne">
+      <label class="champ">Référentiel<select id="rf-table"></select></label>
+      <label class="champ">Rechercher<input id="rf-cherche"></label>
+      <button class="btn" id="rf-nouveau">＋ Nouvelle ligne</button>
+    </div>
+    <p class="discret">Communs à tous les patients ; réservé aux comptes administrateurs (script <code>supabase_atelier_pc_v2.sql</code>).
+      Le téléphone les reprend à son prochain démarrage en ligne. Pas de suppression : des saisies y font référence.</p>
+  </div>
+  <div class="carte" style="overflow-x:auto"><table id="rf-grille"></table></div>
+</section>
+
+</main>
+<div id="message"></div>
+
+<script>
+"use strict";
+// ============================================================================
+// Accès à Supabase (PostgREST) : lecture directe, écriture UNIQUEMENT par les fonctions f_pc_* (journal)
+// ============================================================================
+const S = { url: "", cle: "", user: "", refs: null, lignes: [], jeton: "", relance: "" };
+const stocke = (k, v) => { try { v ? localStorage.setItem("mypark_atelier_" + k, v) : localStorage.removeItem("mypark_atelier_" + k); } catch (e) {} };
+const lu = k => { try { return localStorage.getItem("mypark_atelier_" + k) || ""; } catch (e) { return ""; } };
+
+// ----- Compte (Supabase Auth, code e-mail) : chaque requête porte le jeton du compte ; la RLS ne laisse voir que ses patients
+async function auth(chemin, corps) {
+  const r = await fetch(S.url.replace(/\/$/, "") + "/auth/v1/" + chemin, {
+    method: "POST", headers: { apikey: S.cle, "Content-Type": "application/json" }, body: JSON.stringify(corps)
+  });
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(json.msg || json.error_description || json.message || ("Erreur " + r.status));
+  return json;
+}
+function garderSession(s) {
+  S.jeton = s.access_token; S.relance = s.refresh_token;
+  stocke("jeton", S.jeton); stocke("relance", S.relance);
+}
+/** Jeton expiré (1 h) : un nouveau avec le jeton de relance, sans redemander de code. */
+async function relancer() {
+  if (!S.relance) return false;
+  try { garderSession(await auth("token?grant_type=refresh_token", { refresh_token: S.relance })); return true; }
+  catch (e) { S.jeton = ""; S.relance = ""; stocke("jeton", ""); stocke("relance", ""); return false; }
+}
+
+async function api(chemin, options = {}, deja = false) {
+  const r = await fetch(S.url.replace(/\/$/, "") + "/rest/v1/" + chemin, {
+    ...options,
+    headers: { apikey: S.cle, Authorization: "Bearer " + (S.jeton || S.cle), "Content-Type": "application/json", ...(options.headers || {}) }
+  });
+  if (r.status === 401 && !deja && await relancer()) return api(chemin, options, true);
+  const texte = await r.text();
+  const json = texte ? JSON.parse(texte) : null;
+  // Fonction inconnue de Supabase : le script qui la crée n'est pas encore passé
+  if (!r.ok && json && json.code === "PGRST202") {
+    const fn = chemin.replace(/^rpc\//, "");
+    const script = ["f_pc_ajouter", "f_pc_ref_enregistrer"].includes(fn) ? "supabase_atelier_pc_v2.sql" : "supabase_journal_pc.sql";
+    throw new Error(`la fonction ${fn} n'existe pas encore dans Supabase : passez le script ${script} (SQL Editor)`);
+  }
+  if (!r.ok) throw new Error((json && (json.message || json.hint)) || ("Erreur " + r.status));
+  return json;
+}
+/** Toutes les lignes (pages de 1000 : limite habituelle de PostgREST). */
+async function tout(chemin) {
+  const res = [];
+  for (let debut = 0; ; debut += 1000) {
+    const page = await api(chemin, { headers: { Range: `${debut}-${debut + 999}`, "Range-Unit": "items" } });
+    res.push(...page);
+    if (page.length < 1000) return res;
+  }
+}
+const rpc = (fn, corps) => api("rpc/" + fn, { method: "POST", body: JSON.stringify(corps) });
+const modifier = (table, cle, valeurs) => rpc("f_pc_modifier", { p_table: table, p_id_user: S.user, p_cle: cle, p_valeurs: valeurs });
+const supprimer = (table, cle) => rpc("f_pc_supprimer", { p_table: table, p_id_user: S.user, p_cle: cle });
+// 21/10 (supabase_atelier_pc_v2.sql) : ajout d'une ligne patient (journalisée), référentiels (comptes de t_admins)
+const ajouter = (table, valeurs) => rpc("f_pc_ajouter", { p_table: table, p_id_user: S.user, p_valeurs: valeurs });
+const enregistrerRef = (table, ligne) => rpc("f_pc_ref_enregistrer", { p_table: table, p_ligne: ligne });
+const nouvelId = () => crypto.randomUUID();
+const maintenantIso = () => new Date().toISOString();
+
+// ============================================================================
+// Petits outils
+// ============================================================================
+const $ = id => document.getElementById(id);
+/** Clé « A:code » / « F:fiche » de chaque activité des lignes chargées (Événements, Journée) → nombre de fois. */
+function frequencesActivites() {
+  const n = {};
+  [...(S.lignes || []), ...(typeof J !== "undefined" ? J.lignes : [])].forEach(l => {
+    if (l.type !== "activite" || l.r.statut === "ANNULEE") return;
+    const k = l.r.code_activite ? "A:" + l.r.code_activite : "F:" + l.r.id_fiche;
+    n[k] = (n[k] || 0) + 1;
+  });
+  return n;
+}
+/** Activités du référentiel et fiches perso (★), les plus faites d'abord, puis par ordre alphabétique.
+ *  Les anciennes activités de repos (devenues siestes / nuits sur le téléphone) sont écartées. */
+function optionsActivites() {
+  const n = frequencesActivites();
+  const toutes = [...S.refs.actRef.filter(a => !a.code_activite.startsWith("VIE_REPOS"))
+                    .map(a => ["A:" + a.code_activite, `${a.icone_activite || "•"} ${a.libelle_activite}`]),
+                  ...S.refs.actFiches.map(f => ["F:" + f.id_fiche, `★ ${f.icone_fiche || "•"} ${f.titre_conceptuel}`])];
+  const nom = l => l.replace(/^[^\p{L}\p{N}]+/u, "");
+  return toutes.sort((a, b) => (n[b[0]] || 0) - (n[a[0]] || 0) || nom(a[1]).localeCompare(nom(b[1]), "fr"));
+}
+function activitePlusFrequente() {
+  const k = optionsActivites()[0]?.[0] || "";
+  return k.startsWith("F:") ? { code_activite: null, id_fiche: k.slice(2) } : { code_activite: k.slice(2) || null, id_fiche: null };
+}
+/** Sans accents ni majuscules. */
+const sansAccents = s => String(s).normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+/** Chaque mot tapé doit commencer un mot du libellé, ou s'y trouver (3 lettres et plus). */
+function correspond(libelle, saisie) {
+  const mots = sansAccents(libelle).split(/[^a-z0-9]+/).filter(Boolean), texte = mots.join(" ");
+  return sansAccents(saisie).split(/\s+/).filter(Boolean).every(m => mots.some(x => x.startsWith(m)) || (m.length >= 3 && texte.includes(m)));
+}
+// Champ de recherche au-dessus d'une longue liste : la liste se restreint à chaque lettre ; Entrée = première proposition
+document.addEventListener("input", ev => {
+  const f = ev.target; if (!f.classList || !f.classList.contains("filtre-choix")) return;
+  const sel = document.getElementById(f.dataset.filtre); if (!sel) return;
+  let visibles = 0;
+  [...sel.options].forEach(o => { o.hidden = f.value.trim() !== "" && !correspond(o.textContent, f.value); if (!o.hidden) visibles++; });
+  sel.size = f.value.trim() ? Math.max(2, Math.min(8, visibles)) : 0;
+});
+document.addEventListener("keydown", ev => {
+  const f = ev.target; if (!f.classList || !f.classList.contains("filtre-choix") || ev.key !== "Enter") return;
+  ev.preventDefault();
+  const sel = document.getElementById(f.dataset.filtre); const o = sel && [...sel.options].find(x => !x.hidden);
+  if (!o) return;
+  sel.value = o.value; f.value = ""; [...sel.options].forEach(x => x.hidden = false); sel.size = 0;
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
+});
+document.addEventListener("change", ev => {
+  // Une proposition choisie dans la liste restreinte : la liste se referme
+  const sel = ev.target; if (!sel.classList || !sel.classList.contains("choix-long")) return;
+  const f = document.querySelector(`.filtre-choix[data-filtre="${sel.id}"]`);
+  if (f && f.value) { f.value = ""; [...sel.options].forEach(x => x.hidden = false); sel.size = 0; }
+}, true);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const deux = n => String(n).padStart(2, "0");
+const jourLocal = d => `${d.getFullYear()}-${deux(d.getMonth() + 1)}-${deux(d.getDate())}`;
+/** timestamptz → valeur d'un champ datetime-local (heure de Paris du navigateur). */
+const versLocal = iso => { if (!iso) return ""; const d = new Date(iso); return `${jourLocal(d)}T${deux(d.getHours())}:${deux(d.getMinutes())}`; };
+const versIso = local => local ? new Date(local).toISOString() : null;
+const heure = iso => iso ? new Date(iso).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—";
+const jourTitre = iso => new Date(iso).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+function message(texte, erreur = false) {
+  const m = $("message"); m.textContent = texte; m.className = erreur ? "erreur" : ""; m.style.display = "block";
+  // Une erreur reste affichée jusqu'à un clic (elle passait inaperçue)
+  clearTimeout(message.t); if (!erreur) message.t = setTimeout(() => m.style.display = "none", 3500);
+  m.onclick = () => m.style.display = "none"; m.title = erreur ? "Cliquer pour fermer" : "";
+}
+
+// ============================================================================
+// Types d'événements : table, clé, heure, résumé et champs modifiables
+// ============================================================================
+const INTENSITES = [["", "—"], [1, "Léger"], [2, "Moyen"], [3, "Fort"], [4, "Très fort"]];
+const HUMEURS = [[1, "😣 Très mal"], [2, "🙁 Pas bien"], [3, "😐 Moyen"], [4, "🙂 Bien"], [5, "😄 Très bien"]];
+const ETATS = [["OFF", "🔴 OFF bloqué"], ["ON_DG", "🟠 ON, dyskinésies gênantes"], ["ON_DNG", "🟡 ON, dyskinésies non gênantes"], ["ON", "🟢 ON"]];
+const FAMILLES = [["PROTEINES", "🍗 Protéines"], ["FECULENTS", "🍞 Féculents"], ["PATES", "🍝 Pâtes"], ["LEGUMES", "🥦 Légumes"],
+  ["FRUITS", "🍎 Fruits"], ["LAITIERS", "🧀 Laitages"], ["SUCRE", "🍫 Sucré"], ["GRAS_SALE", "🥨 Gras / salé"],
+  ["JUS_SODA", "🧃 Jus, soda"], ["CAFE_THE", "☕ Café, thé"], ["ALCOOL", "🍷 Alcool"]];
+const AMBIANCES = [["", "—"], ["CALME", "🟢 Calme"], ["CHARGE", "🟠 Chargé"], ["SURCHARGE", "🔴 Surchargé"]];
+const AXES = [["ELAN", "🔋 Élan"], ["TENSION", "🌀 Tension"]];
+const SCORES5 = [[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]];
+const TYPES_EVT = [["MALADIE", "🤒 Maladie"], ["DOULEUR", "🤕 Douleur qui dure"], ["BLESSURE", "🩹 Blessure"], ["INTERVENTION", "🏥 Intervention, soin"], ["AUTRE", "❗ Autre"]];
+const MOMENTS = [["BON", "😊 Bon moment"], ["REUSSITE", "🏆 Réussite"], ["DUR", "😞 Moment dur"], ["ECHEC", "💢 Échec"]];
+const nomSuivi = id => {
+  if (id === "RAS_SYMPTOMES") return "🧠 Rien à signaler (symptômes)";
+  const d = (S.refs.suivis || []).find(x => x.id_suivi === id); return d ? `${d.icone} ${d.titre}` : "suivi ?";
+};
+/** Valeur d'une mesure en mots (niveau de l'échelle, oui / non, note de bilan, score d'un test). */
+const valeurSuivi = r => {
+  const d = (S.refs.suivis || []).find(x => x.id_suivi === r.id_suivi);
+  if (r.valeur == null) return "pas de bilan";
+  if (!d) return r.id_suivi === "RAS_SYMPTOMES" ? (r.valeur >= 1 ? "rien à signaler" : "oubli") : String(r.valeur);
+  if (d.forme === "ECHELLE") return (d.niveaux || "").split("|")[r.valeur] || String(r.valeur);
+  if (d.forme === "OUI_NON") return r.valeur >= 1 ? "Oui" : "Non";
+  if (d.forme === "BILAN") return r.valeur + "/5";
+  if (d.forme === "TEST_FRAPPE") return Math.round(r.valeur) + " car./min";
+  return Math.round(r.valeur) + " dB";
+};
+
+const nomFiche = id => { const f = S.refs.fiches.find(x => x.id_fiche === id); return f ? `${f.icone || "⚠"} ${f.titre_conceptuel}` : "fiche ?"; };
+const nomMed = id => { const m = S.refs.meds.find(x => x.id_medicament === id); return m ? [m.nom_commercial || m.molecule, m.dosage].filter(Boolean).join(" ") : "médicament ?"; };
+const nomActivite = r => {
+  if (r.code_activite) { const a = S.refs.actRef.find(x => x.code_activite === r.code_activite); return a ? `${a.icone_activite || "•"} ${a.libelle_activite}` : r.code_activite; }
+  const f = S.refs.actFiches.find(x => x.id_fiche === r.id_fiche); return f ? `${f.icone_fiche || "•"} ${f.titre_conceptuel}` : "activité ?";
+};
+
+const TYPES = {
+  symptome: { table: "t_sympt_saisies_patient", icone: "🧠", libelle: "Symptôme", cle: ["id_saisie"], temps: r => r.dat_saisie, filtre: "dat_saisie",
+    resume: r => nomFiche(r.id_fiche),
+    champs: [
+      { c: "dat_saisie", l: "Heure", t: "datetime" },
+      { c: "id_fiche", l: "Symptôme", t: "select", options: () => S.refs.fiches.map(f => [f.id_fiche, `${f.icone || "⚠"} ${f.titre_conceptuel}`]) },
+      { c: "intensite", l: "Intensité", t: "select", nombre: true, options: () => INTENSITES },
+      { c: "duree_min", l: "Durée (min)", t: "number" },
+      { c: "saisie_patient", l: "Mots du patient", t: "text", large: true }
+    ],
+    nouveau: q => ({ id_saisie: nouvelId(), id_fiche: S.refs.fiches[0]?.id_fiche, dat_saisie: q, saisie_patient: "(ajouté sur le PC)" }) },
+  activite: { table: "t_act_saisies_patient", icone: "🚶", libelle: "Activité", cle: ["id_saisie"], temps: r => r.dat_saisie, filtre: "dat_saisie",
+    resume: nomActivite,
+    champs: [
+      { c: "dat_saisie", l: "Début", t: "datetime" },
+      { c: "duree_min", l: "Durée (min)", t: "number" },
+      // Activité du référentiel OU fiche personnelle : une seule des deux colonnes est remplie
+      { c: "quoi", l: "Activité", t: "select", virtuel: true, cherche: true,
+        lire: r => r.code_activite ? "A:" + r.code_activite : "F:" + r.id_fiche,
+        ecrire: (v, m) => { m.code_activite = v.startsWith("A:") ? v.slice(2) : null; m.id_fiche = v.startsWith("F:") ? v.slice(2) : null; },
+        options: optionsActivites },
+      { c: "code_contenant", l: "Cadre", t: "select", options: () => [["", "—"], ...S.refs.contenants.map(c => [c.code_contenant, `${c.icone_contenant || "▫"} ${c.libelle_contenant}`])] },
+      { c: "statut", l: "Statut", t: "select", options: () => [["PREVUE", "Prévue"], ["REALISEE", "Réalisée"], ["ANNULEE", "Annulée"]] },
+      { c: "ambiance", l: "Contexte", t: "select", options: () => AMBIANCES },
+      { c: "axes", l: "Sollicitations", t: "text" }
+    ],
+    // Une activité générée par un modèle et modifiée ici ne doit plus être réécrite par le modèle
+    completer: (r, v) => {
+      if (r.id_affectation && ["dat_saisie", "duree_min", "code_activite", "id_fiche"].some(k => k in v)) v.est_ajustee = true;
+    },
+    nouveau: q => ({ id_saisie: nouvelId(), ...activitePlusFrequente(), dat_saisie: q,
+      duree_min: 30, statut: "REALISEE", est_ajustee: false, saisie_patient: "(ajouté sur le PC)" }) },
+  prise: { table: "t_med_prises", icone: "💊", libelle: "Prise", cle: ["id_prise"], temps: r => r.dat_prise || r.dat_planifiee || r.dat_prevue,
+    resume: r => nomMed(r.id_medicament) + (r.dat_prevue ? ` · ordonnance ${heure(r.dat_prevue)}` : ""),
+    champs: [
+      { c: "statut", l: "Statut", t: "select", options: () => [["PREVU", "Prévue / à confirmer"], ["PRISE", "Prise"], ["OUBLI", "Oubliée"], ["SUPPL", "En plus"]] },
+      { c: "dat_planifiee", l: "Prévue à", t: "datetime" },
+      { c: "dat_prise", l: "Prise à", t: "datetime" },
+      { c: "id_medicament", l: "Médicament", t: "select", options: () => S.refs.meds.map(m => [m.id_medicament, nomMed(m.id_medicament)]) },
+      { c: "dose_prevue", l: "Dose prévue", t: "number", pas: 0.5 },
+      { c: "dose_prise", l: "Dose prise", t: "number", pas: 0.5 }
+    ],
+    // Règle de Supabase (t_med_prises_dat_chk) : « Prise » / « En plus » ont une heure de prise, « Prévue » / « Oubliée »
+    // n'en ont pas. 22/10 : une prise glissée ou modifiée ici envoyait l'un sans l'autre → « violation de contrainte ».
+    completer: (r, v) => {
+      const statut = v.statut ?? r.statut;
+      const datPrise = "dat_prise" in v ? v.dat_prise : r.dat_prise;
+      if (statut === "PREVU" || statut === "OUBLI") {
+        if (datPrise) { if ("statut" in v) v.dat_prise = null; else v.statut = "PRISE"; }   // heure de prise donnée = prise
+      } else if (!datPrise) v.dat_prise = v.dat_planifiee ?? r.dat_planifiee ?? r.dat_prevue ?? maintenantIso();
+      const st = v.statut ?? r.statut;
+      if (st === "SUPPL" && r.id_horaire) v.statut = "PRISE";          // une prise de l'ordonnance n'est pas « en plus »
+      if ((st === "PRISE" || st === "SUPPL") && (v.dose_prise ?? r.dose_prise) == null) v.dose_prise = v.dose_prevue ?? r.dose_prevue ?? 1;
+    },
+    // Une prise ajoutée sur le PC est une prise « en plus » (hors ordonnance), comme sur la frise
+    nouveau: q => ({ id_prise: nouvelId(), id_medicament: S.refs.meds[0]?.id_medicament, statut: "SUPPL", dat_planifiee: q, dat_prise: q,
+      dose_prevue: 1, dose_prise: 1, saisie_patient: "(ajouté sur le PC)" }) },
+  humeur: { table: "t_ressenti_humeur", icone: "😊", libelle: "Humeur", cle: ["id_saisie"], temps: r => r.dat_saisie, filtre: "dat_saisie",
+    resume: r => (HUMEURS.find(h => h[0] === r.score) || ["", "?"])[1],
+    champs: [
+      { c: "dat_saisie", l: "Heure", t: "datetime" },
+      { c: "score", l: "Humeur", t: "select", nombre: true, options: () => HUMEURS },
+      { c: "commentaire", l: "Commentaire", t: "text", large: true }
+    ],
+    nouveau: q => ({ id_saisie: nouvelId(), dat_saisie: q, score: 3 }) },
+  etat: { table: "t_ressenti_etat_moteur", icone: "🟢", libelle: "Mon corps", cle: ["id_saisie"], temps: r => r.dat_saisie, filtre: "dat_saisie",
+    resume: r => (ETATS.find(e => e[0] === r.etat) || ["", r.etat])[1],
+    champs: [
+      { c: "dat_saisie", l: "Heure", t: "datetime" },
+      { c: "etat", l: "État", t: "select", options: () => ETATS },
+      { c: "commentaire", l: "Commentaire", t: "text", large: true }
+    ],
+    nouveau: q => ({ id_saisie: nouvelId(), dat_saisie: q, etat: "ON" }) },
+  cigarette: { table: "t_ressenti_cigarettes", icone: "🚬", libelle: "Cigarette", cle: ["id_saisie"], temps: r => r.dat_saisie, filtre: "dat_saisie",
+    resume: () => "Cigarette",
+    champs: [{ c: "dat_saisie", l: "Heure", t: "datetime" }, { c: "commentaire", l: "Commentaire", t: "text", large: true }],
+    nouveau: q => ({ id_saisie: nouvelId(), dat_saisie: q }) },
+  alimentation: { table: "t_alim_saisies", icone: "🍽️", libelle: "Alimentation", cle: ["id_saisie"], temps: r => r.dat_saisie, filtre: "dat_saisie",
+    resume: r => r.type === "REPAS" ? "🍽️ Repas" + (r.id_saisie_activite ? " (lié à une activité)" : "")
+      : r.type === "EAU" ? `💧 Eau · ${r.quantite_cl ?? 20} cl` : "🍪 Grignotage",
+    champs: [
+      { c: "dat_saisie", l: "Heure", t: "datetime" },
+      { c: "type", l: "Type", t: "select", options: () => [["GRIGNOTAGE", "🍪 Grignotage"], ["REPAS", "🍽️ Repas"], ["EAU", "💧 Eau"]] },
+      { c: "quantite_cl", l: "Eau (cl)", t: "number" },      // 22/10 : type EAU seulement (supabase_hydratation.sql)
+      { c: "familles", l: "Contenait", t: "multi", options: () => FAMILLES },
+      { c: "commentaire", l: "Commentaire", t: "text" }
+    ],
+    nouveau: q => ({ id_saisie: nouvelId(), dat_saisie: q, type: "GRIGNOTAGE" }) },
+  nuit: { table: "t_sommeil_nuits", icone: "🌙", libelle: "Nuit", cle: ["date_reveil"], temps: r => r.dat_lever || (r.date_reveil + "T08:00:00"),
+    resume: r => `Nuit jusqu'au ${new Date(r.date_reveil + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "long" })}`,
+    champs: [
+      { c: "dat_coucher", l: "Coucher", t: "datetime" },
+      { c: "dat_lever", l: "Lever", t: "datetime" },
+      { c: "qualite", l: "Qualité (1–5)", t: "select", nombre: true, options: () => [["", "—"], [1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]] },
+      { c: "reveils", l: "Réveils", t: "select", nombre: true, options: () => [["", "—"], [0, "0"], [1, "1"], [2, "2"], [3, "3 et +"]] },
+      { c: "crampes", l: "Crampes", t: "bool" }, { c: "retournement", l: "Se retourner", t: "bool" },
+      { c: "mictions", l: "Mictions", t: "bool" }, { c: "reves_agites", l: "Rêves agités", t: "bool" },
+      { c: "reveil_off", l: "Réveil OFF", t: "bool" }, { c: "somnolence", l: "Somnolence", t: "bool" },
+      { c: "commentaire", l: "Commentaire", t: "text", large: true }
+    ],
+    // Clé = jour de réveil : celui de l'heure choisie
+    nouveau: q => { const d = new Date(q); const l = new Date(d); l.setHours(7, 0, 0, 0); const c = new Date(l); c.setDate(c.getDate() - 1); c.setHours(23, 0, 0, 0);
+      return { date_reveil: jourLocal(d), dat_coucher: c.toISOString(), dat_lever: l.toISOString(), crampes: false, retournement: false,
+        mictions: false, reves_agites: false, reveil_off: false, somnolence: false, dat_saisie: maintenantIso() }; } },
+
+  // ----- 21/10 : élan / tension, siestes, événements de santé, moments, mesures des suivis
+  axe: { table: "t_ressenti_axes", icone: "🧭", libelle: "Élan / tension", cle: ["id_saisie"], temps: r => r.dat_saisie, filtre: "dat_saisie",
+    resume: r => `${(AXES.find(a => a[0] === r.axe) || ["", r.axe])[1]} : ${r.score}/5`,
+    champs: [
+      { c: "dat_saisie", l: "Heure", t: "datetime" },
+      { c: "axe", l: "Axe", t: "select", options: () => AXES },
+      { c: "score", l: "Score", t: "select", nombre: true, options: () => SCORES5 },
+      { c: "commentaire", l: "Commentaire", t: "text", large: true }
+    ],
+    nouveau: q => ({ id_saisie: nouvelId(), dat_saisie: q, axe: "ELAN", score: 3 }) },
+  sieste: { table: "t_sommeil_siestes", icone: "😴", libelle: "Sieste", cle: ["id_sieste"], temps: r => r.dat_debut, filtre: "dat_debut",
+    resume: r => `Sieste de ${r.duree_min} min`,
+    champs: [
+      { c: "dat_debut", l: "Début", t: "datetime" },
+      { c: "duree_min", l: "Durée (min)", t: "number" },
+      { c: "qualite", l: "Qualité (1–5)", t: "select", nombre: true, options: () => [["", "—"], ...SCORES5] },
+      { c: "endormi", l: "Endormi(e)", t: "bool" },
+      { c: "commentaire", l: "Commentaire", t: "text", large: true }
+    ],
+    nouveau: q => ({ id_sieste: nouvelId(), dat_debut: q, duree_min: 30, endormi: true, dat_saisie: maintenantIso() }) },
+  evenement: { table: "t_evt_ponctuels", icone: "🤒", libelle: "Événement de santé", cle: ["id_evenement"], temps: r => r.dat_debut, filtre: "dat_debut",
+    resume: r => `${(TYPES_EVT.find(t => t[0] === r.type) || ["", r.type])[1]} : ${r.titre}` + (r.dat_fin ? "" : " (en cours)"),
+    champs: [
+      { c: "type", l: "Type", t: "select", options: () => TYPES_EVT },
+      { c: "titre", l: "Titre", t: "text" },
+      { c: "dat_debut", l: "Début", t: "datetime" },
+      { c: "dat_fin", l: "Fin (vide = en cours)", t: "datetime" },
+      { c: "intensite", l: "Intensité", t: "select", nombre: true, options: () => INTENSITES },
+      { c: "localisation", l: "Où", t: "text" },
+      { c: "traitement", l: "Traitement", t: "text" },
+      { c: "chute", l: "Suite à une chute", t: "bool" },
+      { c: "commentaire", l: "Commentaire", t: "text", large: true }
+    ],
+    nouveau: q => ({ id_evenement: nouvelId(), type: "MALADIE", titre: "Maladie", dat_debut: q, chute: false, dat_saisie: maintenantIso() }) },
+  moment: { table: "t_suivi_moments", icone: "😊", libelle: "Moment", cle: ["id_moment"], temps: r => r.dat_moment, filtre: "dat_moment",
+    resume: r => (MOMENTS.find(m => m[0] === r.type) || ["", r.type])[1] + (r.texte ? ` : ${r.texte}` : ""),
+    champs: [
+      { c: "dat_moment", l: "Heure", t: "datetime" },
+      { c: "type", l: "Type", t: "select", options: () => MOMENTS },
+      { c: "texte", l: "Ce qui s'est passé", t: "text", large: true },
+      { c: "intensite", l: "Intensité", t: "select", nombre: true, options: () => [["", "—"], [1, "Un peu"], [2, "Beaucoup"], [3, "Énormément"]] }
+    ],
+    nouveau: q => ({ id_moment: nouvelId(), dat_moment: q, type: "BON", dat_saisie: maintenantIso() }) },
+  mesure: { table: "t_suivi_mesures", icone: "📋", libelle: "Suivi", cle: ["id_mesure"], temps: r => r.dat_mesure, filtre: "dat_mesure",
+    resume: r => `${nomSuivi(r.id_suivi)} : ${valeurSuivi(r)}`,
+    champs: [
+      { c: "dat_mesure", l: "Heure", t: "datetime" },
+      { c: "id_suivi", l: "Suivi", t: "select", options: () => [...(S.refs.suivis || []).map(d => [d.id_suivi, `${d.icone} ${d.titre}`]), ["RAS_SYMPTOMES", "🧠 Rien à signaler"]] },
+      { c: "valeur", l: "Valeur (niveau 0…, note 1–5, score)", t: "number", pas: 0.1 },
+      { c: "details", l: "Détails (JSON)", t: "text", large: true },
+      { c: "commentaire", l: "Commentaire", t: "text", large: true }
+    ],
+    nouveau: q => ({ id_mesure: nouvelId(), id_suivi: (S.refs.suivis || [])[0]?.id_suivi || "RAS_SYMPTOMES", dat_mesure: q, valeur: 0, dat_saisie: maintenantIso() }) }
+};
+
+// ============================================================================
+// Chargement
+// ============================================================================
+async function chargerRefs() {
+  const u = encodeURIComponent(S.user);
+  const [fiches, actRef, actFiches, contenants, meds, sousCat] = await Promise.all([
+    tout(`t_sympt_fiches?select=*&id_user=eq.${u}&order=titre_conceptuel`),
+    tout(`t_act_ref_activites?select=code_activite,libelle_activite,icone_activite&order=libelle_activite`),
+    tout(`t_act_fiches?select=*&id_user=eq.${u}&order=titre_conceptuel`),
+    tout(`t_act_ref_contenants?select=code_contenant,libelle_contenant,icone_contenant&order=libelle_contenant`),
+    tout(`t_med_medicaments?select=id_medicament,molecule,nom_commercial,dosage&id_user=eq.${u}`),
+    tout(`t_sympt_ref_sous_categories?select=code_sous_categorie,libelle_sous_categorie&order=libelle_sous_categorie`)
+  ]);
+  // Suivis (supabase_suivis.sql) : facultatif, la page marche sans
+  const suivis = await tout(`t_suivi_definitions?select=*&id_user=eq.${u}&order=ordre`).catch(() => []);
+  S.refs = { fiches, actRef, actFiches, contenants, meds, sousCat, suivis };
+}
+
+/** Lignes de [types] entre deux instants (ISO). */
+async function chargerPeriode(types, debutIso, finIso) {
+  const u = encodeURIComponent(S.user);
+  const q = s => `"${s}"`;
+  const lots = await Promise.all(types.map(async type => {
+    const T = TYPES[type];
+    let filtre;
+    if (type === "prise") {
+      // Prévue OU prise dans la période (valeurs entre guillemets : « : » et « . » sont réservés dans or=)
+      filtre = "or=" + encodeURIComponent(
+        `(and(dat_planifiee.gte.${q(debutIso)},dat_planifiee.lt.${q(finIso)}),and(dat_prise.gte.${q(debutIso)},dat_prise.lt.${q(finIso)}))`);
+    } else if (type === "nuit") {
+      // Jours LOCAUX (en ISO, minuit à Paris tombe la veille à 22 h UTC : la nuit d'hier apparaissait)
+      const finJour = new Date(finIso); finJour.setMilliseconds(-1);
+      filtre = `date_reveil=gte.${jourLocal(new Date(debutIso))}&date_reveil=lte.${jourLocal(finJour)}`;
+    } else {
+      filtre = `${T.filtre}=gte.${encodeURIComponent(debutIso)}&${T.filtre}=lt.${encodeURIComponent(finIso)}`;
+    }
+    // Une table absente (script pas encore passé) ne bloque pas les autres
+    const lignes = await tout(`${T.table}?select=*&id_user=eq.${u}&${filtre}`)
+      .catch(e => { message(`${T.libelle} : ${e.message}`, true); return []; });
+    return lignes.map(r => ({ type, r, modifs: {} }));
+  }));
+  return lots.flat().sort((a, b) => new Date(TYPES[a.type].temps(a.r)) - new Date(TYPES[b.type].temps(b.r)));
+}
+
+const typesChoisis = () => [...document.querySelectorAll("#ev-types input:checked")].map(i => i.value);
+
+async function chargerEvenements() {
+  if (!S.refs) return message("Connectez-vous d'abord (onglet Connexion).", true);
+  const du = $("ev-du").value, au = $("ev-au").value || du;
+  if (!du) return;
+  const debut = new Date(du + "T00:00:00"), fin = new Date(au + "T00:00:00"); fin.setDate(fin.getDate() + 1);
+  $("ev-compteurs").textContent = "Chargement…";
+  try {
+    S.lignes = await chargerPeriode(typesChoisis(), debut.toISOString(), fin.toISOString());
+    afficherEvenements();
+  } catch (e) { $("ev-compteurs").textContent = ""; message("Lecture impossible : " + e.message, true); }
+}
+
+// ============================================================================
+// Affichage et modification des événements
+// ============================================================================
+function valeurChamp(ch, ligne) {
+  if (ch.c in ligne.modifs) return ligne.modifs[ch.c];
+  return ch.virtuel ? ch.lire(ligne.r) : ligne.r[ch.c];
+}
+
+function htmlChamp(ch, ligne, i) {
+  const v = valeurChamp(ch, ligne);
+  const id = `c${i}_${ch.c}`;
+  const attr = `data-i="${i}" data-c="${ch.c}"`;
+  if (ch.t === "datetime") return `<label class="champ">${ch.l}<input type="datetime-local" ${attr} value="${esc(versLocal(v))}"></label>`;
+  if (ch.t === "date") return `<label class="champ">${ch.l}<input type="date" ${attr} value="${esc(v ? String(v).slice(0, 10) : "")}"></label>`;
+  if (ch.t === "time") return `<label class="champ">${ch.l}<input type="time" ${attr} value="${esc(v ? String(v).slice(0, 5) : "")}"></label>`;
+  if (ch.t === "textarea") return `<label class="champ">${ch.l}<textarea rows="3" ${attr} style="width:100%">${esc(v)}</textarea></label>`;
+  if (ch.t === "number") return `<label class="champ">${ch.l}<input type="number" step="${ch.pas || 1}" ${attr} value="${v ?? ""}"></label>`;
+  if (ch.t === "bool") return `<label class="champ">${ch.l}<input type="checkbox" ${attr} ${v ? "checked" : ""}></label>`;
+  if (ch.t === "text") return `<label class="champ">${ch.l}<input ${ch.large ? 'class="large"' : ""} ${attr} value="${esc(v)}"></label>`;
+  if (ch.t === "multi") {
+    const coches = new Set(String(v || "").split(",").filter(Boolean));
+    return `<label class="champ">${ch.l}<span class="multi">${ch.options().map(([k, l]) =>
+      `<label><input type="checkbox" data-i="${i}" data-c="${ch.c}" data-k="${k}" ${coches.has(k) ? "checked" : ""}> ${esc(l)}</label>`).join("")}</span></label>`;
+  }
+  // select
+  const opts = ch.options();
+  const connue = opts.some(([k]) => String(k) === String(v ?? ""));
+  const cherche = ch.cherche ? `<input type="search" class="filtre-choix" data-filtre="${id}" placeholder="🔎 tapez quelques lettres, Entrée = la première" autocomplete="off">` : "";
+  return `<label class="champ">${ch.l}${cherche}<select ${attr} id="${id}"${ch.cherche ? ' class="choix-long"' : ""}>${connue ? "" : `<option selected>${esc(v ?? "—")}</option>`}${
+    opts.map(([k, l]) => `<option value="${esc(k)}" ${String(k) === String(v ?? "") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>`;
+}
+
+function afficherEvenements() {
+  const filtre = $("ev-cherche").value.trim().toLowerCase();
+  const corps = $("ev-corps");
+  let html = "", jourCourant = "";
+  const comptes = {};
+  S.lignes.forEach((ligne, i) => {
+    const T = TYPES[ligne.type];
+    const resume = T.resume(ligne.r);
+    if (filtre && !(resume + " " + JSON.stringify(ligne.r)).toLowerCase().includes(filtre)) { ligne.visible = false; return; }
+    ligne.visible = true;
+    comptes[ligne.type] = (comptes[ligne.type] || 0) + 1;
+    const t = T.temps(ligne.r);
+    const jour = t ? jourLocal(new Date(t)) : "";
+    if (jour !== jourCourant) { jourCourant = jour; html += `<tr class="jour"><td colspan="5">${t ? jourTitre(t) : "Sans date"}</td></tr>`; }
+    const modifiee = ligne.nouvelle || Object.keys(ligne.modifs).length > 0;
+    html += `<tr class="${modifiee ? "modifiee" : ""}" id="l${i}">
+      <td><input type="checkbox" class="sel" data-i="${i}" ${ligne.sel ? "checked" : ""}></td>
+      <td class="heure">${heure(t)}</td>
+      <td class="type">${T.icone} ${T.libelle}${ligne.nouvelle ? ' <span class="discret">(nouveau)</span>' : ""}<div class="discret">${esc(resume)}</div></td>
+      <td><div class="champs">${T.champs.map(ch => htmlChamp(ch, ligne, i)).join("")}</div></td>
+      <td><button class="btn" data-enregistrer="${i}" ${modifiee ? "" : "disabled"} title="Enregistrer">💾</button>
+          <button class="btn danger" data-supprimer="${i}" title="Supprimer">🗑</button></td></tr>`;
+  });
+  corps.innerHTML = html || `<tr><td colspan="5" class="discret">Rien sur cette période.</td></tr>`;
+  $("ev-compteurs").innerHTML = Object.keys(comptes).length
+    ? Object.entries(comptes).map(([t, n]) => `<span>${TYPES[t].icone} ${n}</span>`).join("") : "Aucun événement.";
+  majBoutons();
+}
+
+function majBoutons() {
+  $("ev-tout-enregistrer").disabled = !S.lignes.some(l => l.nouvelle || Object.keys(l.modifs).length);
+  const n = S.lignes.filter(l => l.sel && l.visible).length;
+  $("ev-supprimer").disabled = n === 0;
+  $("ev-supprimer").textContent = n ? `🗑 Supprimer la sélection (${n})` : "🗑 Supprimer la sélection";
+}
+
+/** Valeur saisie dans un champ (racine = ce qui contient les cases d'un champ « multi »). */
+function valeurSaisie(el, ch, racine) {
+  if (ch.t === "datetime") return versIso(el.value);
+  if (ch.t === "date" || ch.t === "time") return el.value || null;
+  if (ch.t === "number") return el.value === "" ? null : Number(el.value);
+  if (ch.t === "bool") return el.checked;
+  if (ch.t === "multi") {
+    const v = [...racine.querySelectorAll(`input[data-c="${ch.c}"][data-k]:checked`)].map(x => x.dataset.k);
+    return ch.options().map(o => o[0]).filter(k => v.includes(k)).join(",") || null;
+  }
+  if (ch.nombre) return el.value === "" ? null : Number(el.value);
+  return el.value === "" ? null : el.value;
+}
+
+/** Un champ a changé : la modification est gardée en mémoire jusqu'à « Enregistrer ». */
+$("ev-corps").addEventListener("change", ev => {
+  const el = ev.target;
+  if (el.classList.contains("sel")) { S.lignes[+el.dataset.i].sel = el.checked; return majBoutons(); }
+  const i = el.dataset.i, c = el.dataset.c;
+  if (i === undefined) return;
+  const ligne = S.lignes[+i];
+  const ch = TYPES[ligne.type].champs.find(x => x.c === c);
+  ligne.modifs[c] = valeurSaisie(el, ch, $("l" + i));
+  $("l" + i).classList.add("modifiee");
+  $("l" + i).querySelector("[data-enregistrer]").disabled = false;
+  majBoutons();
+});
+
+/** Valeurs à envoyer : champs virtuels traduits en colonnes, compléments propres au type. */
+function valeursAEnvoyer(ligne) {
+  const T = DEF(ligne.type);
+  const v = {};
+  Object.entries(ligne.modifs).forEach(([c, val]) => {
+    const ch = T.champs.find(x => x.c === c);
+    if (ch && ch.virtuel) ch.ecrire(val, v); else v[c] = val;
+  });
+  if (T.completer) T.completer(ligne.r, v);
+  return v;
+}
+/** Définition d'un type : événement (TYPES) ou soin (SOINS, onglet Soins). */
+const DEF = t => TYPES[t] || SOINS[t];
+const cleDe = ligne => Object.fromEntries(DEF(ligne.type).cle.map(k => [k, ligne.r[k]]));
+
+async function enregistrer(lignes) {
+  let ok = 0;
+  for (const ligne of lignes) {
+    try {
+      const valeurs = valeursAEnvoyer(ligne);
+      if (ligne.nouvelle) {
+        // Ajout : la ligne entière (valeurs par défaut du type + champs changés)
+        const complete = Object.fromEntries(Object.entries({ ...ligne.r, ...valeurs }).filter(([, v]) => v !== undefined));
+        await ajouter(DEF(ligne.type).table, complete);
+        ligne.r = complete; ligne.nouvelle = false;
+      } else {
+        await modifier(DEF(ligne.type).table, cleDe(ligne), valeurs);
+        Object.assign(ligne.r, valeurs);
+      }
+      ligne.modifs = {}; ok++;
+    } catch (e) { message(`${DEF(ligne.type).libelle} : ${e.message}`, true); }
+  }
+  if (ok) message(`${ok} enregistrement(s) — le téléphone les reprendra au prochain rattrapage.`);
+}
+
+/** Nouvelle ligne du type choisi, au jour affiché (heure actuelle si c'est aujourd'hui, sinon midi). */
+function nouvelleLigne() {
+  if (!S.refs) return message("Connectez-vous d'abord (onglet Connexion).", true);
+  const type = $("ev-type-ajout").value;
+  const jour = $("ev-du").value || jourLocal(new Date());
+  const q = jour === jourLocal(new Date()) ? new Date() : new Date(jour + "T12:00:00");
+  q.setSeconds(0, 0);
+  S.lignes.unshift({ type, r: TYPES[type].nouveau(q.toISOString()), modifs: {}, nouvelle: true });
+  afficherEvenements();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function supprimerLignes(lignes) {
+  // Une ligne ajoutée mais pas encore enregistrée disparaît simplement
+  lignes.filter(l => l.nouvelle).forEach(l => l.supprimee = true);
+  lignes = lignes.filter(l => !l.nouvelle);
+  S.lignes = S.lignes.filter(l => !l.supprimee);
+  if (!lignes.length) return;
+  if (!confirm(`Supprimer définitivement ${lignes.length} événement(s) ? Ils seront aussi retirés du téléphone.`)) return;
+  let ok = 0;
+  for (const ligne of lignes) {
+    try { const n = await supprimer(DEF(ligne.type).table, cleDe(ligne)); if (n > 0) { ligne.supprimee = true; ok++; } }
+    catch (e) { message(`${DEF(ligne.type).libelle} : ${e.message}`, true); }
+  }
+  S.lignes = S.lignes.filter(l => !l.supprimee);
+  if (ok) message(`${ok} événement(s) supprimé(s).`);
+}
+
+$("ev-corps").addEventListener("click", async ev => {
+  const b = ev.target.closest("button"); if (!b) return;
+  if (b.dataset.enregistrer !== undefined) { await enregistrer([S.lignes[+b.dataset.enregistrer]]); afficherEvenements(); }
+  if (b.dataset.supprimer !== undefined) { await supprimerLignes([S.lignes[+b.dataset.supprimer]]); afficherEvenements(); }
+});
+$("ev-tout-enregistrer").onclick = async () => { await enregistrer(S.lignes.filter(l => l.nouvelle || Object.keys(l.modifs).length)); afficherEvenements(); };
+$("ev-ajouter").onclick = nouvelleLigne;
+$("ev-supprimer").onclick = async () => { await supprimerLignes(S.lignes.filter(l => l.sel && l.visible)); afficherEvenements(); };
+$("ev-tout").onchange = e => { S.lignes.forEach(l => { if (l.visible) l.sel = e.target.checked; }); afficherEvenements(); };
+$("ev-cherche").oninput = () => afficherEvenements();
+$("ev-charger").onclick = chargerEvenements;
+function decaler(n) {
+  const d = new Date(($("ev-du").value || jourLocal(new Date())) + "T12:00:00"); d.setDate(d.getDate() + n);
+  $("ev-du").value = $("ev-au").value = jourLocal(d); chargerEvenements();
+}
+$("ev-prec").onclick = () => decaler(-1);
+$("ev-suiv").onclick = () => decaler(1);
+$("ev-auj").onclick = () => { $("ev-du").value = $("ev-au").value = jourLocal(new Date()); chargerEvenements(); };
+window.addEventListener("beforeunload", e => { if (S.lignes.some(l => l.nouvelle || Object.keys(l.modifs).length)) { e.preventDefault(); e.returnValue = ""; } });
+
+// Puces des types
+$("ev-types").innerHTML = Object.entries(TYPES).map(([k, T]) =>
+  `<label class="puce active"><input type="checkbox" value="${k}" checked> ${T.icone} ${T.libelle}</label>`).join("");
+$("ev-types").addEventListener("change", e => e.target.closest(".puce").classList.toggle("active", e.target.checked));
+$("ev-type-ajout").innerHTML = Object.entries(TYPES).map(([k, T]) => `<option value="${k}">${T.icone} ${T.libelle}</option>`).join("");
+
+// ============================================================================
+// Nettoyage : doublons, prises à confirmer, activités prévues passées, fiches inutilisées
+// ============================================================================
+const NT = { groupes: [] };   // chaque groupe : { titre, explication, lignes, actions }
+
+/** Même chose notée deux fois à moins de 3 minutes d'écart. */
+function doublons(lignes) {
+  const identite = l => ({ symptome: r => r.id_fiche, activite: r => r.code_activite || r.id_fiche, prise: r => r.id_medicament,
+    humeur: r => r.score, etat: r => r.etat, cigarette: () => "", alimentation: r => r.type,
+    axe: r => r.axe, sieste: () => "", evenement: r => r.type + "|" + r.titre, moment: r => r.type, mesure: r => r.id_suivi
+  }[l.type] || (r => JSON.stringify(r)))(l.r);
+  // Une activité ANNULEE (générée par un modèle puis retirée, gardée pour ne pas être recréée) ou encore PREVUE
+  // n'est pas une saisie : seule une activité réalisée peut faire doublon
+  const compte = l => l.type !== "nuit" && !(l.type === "activite" && l.r.statut !== "REALISEE");
+  const res = [];
+  const parCle = {};
+  lignes.filter(compte).forEach(l => (parCle[l.type + "|" + identite(l)] ||= []).push(l));
+  Object.values(parCle).forEach(liste => {
+    liste.sort((a, b) => new Date(TYPES[a.type].temps(a.r)) - new Date(TYPES[b.type].temps(b.r)));
+    for (let i = 1; i < liste.length; i++) {
+      const ecart = new Date(TYPES[liste[i].type].temps(liste[i].r)) - new Date(TYPES[liste[i - 1].type].temps(liste[i - 1].r));
+      // Une prise générée (PREVU) n'est pas un doublon d'une autre prise : seules les prises notées comptent
+      if (liste[i].type === "prise" && (liste[i].r.statut === "PREVU" || liste[i - 1].r.statut === "PREVU")) continue;
+      if (ecart <= 3 * 60_000) { liste[i].sel = true; res.push(liste[i - 1], liste[i]); }
+    }
+  });
+  return [...new Set(res)];
+}
+
+async function analyser() {
+  if (!S.refs) return message("Connectez-vous d'abord (onglet Connexion).", true);
+  const jours = +$("nt-jours").value;
+  const fin = new Date(); const debut = new Date(); debut.setDate(debut.getDate() - jours);
+  $("nt-resultats").innerHTML = `<div class="carte discret">Analyse de ${jours} jours…</div>`;
+  try {
+    const lignes = await chargerPeriode(Object.keys(TYPES), debut.toISOString(), fin.toISOString());
+    lignes.forEach(l => l.sel = false);
+    const hier = new Date(); hier.setHours(0, 0, 0, 0);
+    const prisesOubliees = lignes.filter(l => l.type === "prise" && l.r.statut === "PREVU" && new Date(l.r.dat_planifiee || l.r.dat_prevue) < hier);
+    const activitesPassees = lignes.filter(l => l.type === "activite" && l.r.statut === "PREVUE" && new Date(l.r.dat_saisie) < hier);
+    const comptes = {};
+    (await tout(`t_sympt_saisies_patient?select=id_fiche&id_user=eq.${encodeURIComponent(S.user)}`)).forEach(s => comptes[s.id_fiche] = (comptes[s.id_fiche] || 0) + 1);
+    const fichesVides = S.refs.fiches.filter(f => !comptes[f.id_fiche]).map(f => ({ type: "fiche", r: f, sel: true }));
+    const dbl = doublons(lignes);
+    prisesOubliees.forEach(l => l.sel = true); activitesPassees.forEach(l => l.sel = true);
+    NT.groupes = [
+      { titre: "Doublons probables", explication: "Même chose notée deux fois à moins de 3 minutes d'écart. Le second de chaque paire est présélectionné.",
+        lignes: dbl, actions: [["🗑 Supprimer la sélection", "supprimer"]] },
+      { titre: "Prises restées « à confirmer »", explication: "Prises prévues avant aujourd'hui, jamais confirmées ni déclarées oubliées.",
+        lignes: prisesOubliees, actions: [["✓ Prises à l'heure prévue", "prisesOk"], ["✖ Oubliées", "prisesOubli"], ["🗑 Supprimer", "supprimer"]] },
+      { titre: "Activités prévues, jamais validées", explication: "Activités des modèles avant aujourd'hui, restées « prévues ». « Annulées » les garde (sinon le modèle les recrée).",
+        lignes: activitesPassees, actions: [["✓ Réalisées", "actOk"], ["✖ Annulées", "actAnnulees"]] },
+      { titre: "Fiches de symptômes jamais utilisées", explication: "Aucune saisie ne s'y rattache.",
+        lignes: fichesVides, actions: [["🗑 Supprimer", "supprimer"]] }
+    ];
+    afficherNettoyage();
+  } catch (e) { $("nt-resultats").innerHTML = ""; message("Analyse impossible : " + e.message, true); }
+}
+
+function decrire(l) {
+  if (l.type === "fiche") return `${esc(l.r.icone || "⚠")} ${esc(l.r.titre_conceptuel)}`;
+  const T = TYPES[l.type], t = T.temps(l.r);
+  return `${t ? new Date(t).toLocaleString("fr-FR", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : ""} · ${T.icone} ${esc(T.resume(l.r))}` +
+    (l.r.statut ? ` <span class="discret">(${esc(l.r.statut)})</span>` : "");
+}
+
+function afficherNettoyage() {
+  $("nt-resultats").innerHTML = NT.groupes.map((g, gi) => `
+    <div class="carte">
+      <h2>${g.titre} <span class="discret">(${g.lignes.length})</span></h2>
+      <p class="discret">${g.explication}</p>
+      ${g.lignes.length ? `
+      <div class="ligne" style="margin-bottom:8px">
+        <label class="puce"><input type="checkbox" data-g="${gi}" class="nt-tout" ${g.lignes.every(l => l.sel) ? "checked" : ""}> tout</label>
+        ${g.actions.map(([l, a]) => `<button class="btn ${a === "supprimer" ? "danger" : ""}" data-g="${gi}" data-action="${a}">${l}</button>`).join("")}
+      </div>
+      <table><tbody>${g.lignes.map((l, li) => `<tr><td style="width:30px"><input type="checkbox" data-g="${gi}" data-li="${li}" ${l.sel ? "checked" : ""}></td><td>${decrire(l)}</td></tr>`).join("")}</tbody></table>`
+      : `<p>✓ Rien à nettoyer.</p>`}
+    </div>`).join("");
+}
+
+$("nt-resultats").addEventListener("change", e => {
+  const g = NT.groupes[+e.target.dataset.g]; if (!g) return;
+  if (e.target.classList.contains("nt-tout")) { g.lignes.forEach(l => l.sel = e.target.checked); afficherNettoyage(); }
+  else g.lignes[+e.target.dataset.li].sel = e.target.checked;
+});
+
+$("nt-resultats").addEventListener("click", async e => {
+  const b = e.target.closest("button[data-action]"); if (!b) return;
+  const g = NT.groupes[+b.dataset.g];
+  const choisies = g.lignes.filter(l => l.sel);
+  if (!choisies.length) return message("Rien de sélectionné.", true);
+  const a = b.dataset.action;
+  b.disabled = true;
+  let ok = 0;
+  if (a === "supprimer") {
+    if (!confirm(`Supprimer définitivement ${choisies.length} élément(s) ?`)) { b.disabled = false; return; }
+    for (const l of choisies) {
+      try { await supprimer(l.type === "fiche" ? "t_sympt_fiches" : TYPES[l.type].table,
+                            l.type === "fiche" ? { id_fiche: l.r.id_fiche } : cleDe(l)); l.fait = true; ok++; }
+      catch (x) { message(x.message, true); }
+    }
+  } else {
+    if (!confirm(`Appliquer à ${choisies.length} élément(s) ?`)) { b.disabled = false; return; }
+    for (const l of choisies) {
+      const v = {
+        prisesOk: { statut: "PRISE", dat_prise: l.r.dat_planifiee || l.r.dat_prevue, dose_prise: l.r.dose_prevue },
+        prisesOubli: { statut: "OUBLI" },
+        actOk: { statut: "REALISEE" },
+        actAnnulees: { statut: "ANNULEE" }
+      }[a];
+      try { await modifier(TYPES[l.type].table, cleDe(l), v); l.fait = true; ok++; } catch (x) { message(x.message, true); }
+    }
+  }
+  g.lignes = g.lignes.filter(l => !l.fait);
+  if (a === "supprimer" && g === NT.groupes[3]) await chargerRefs();
+  afficherNettoyage();
+  if (ok) message(`${ok} élément(s) traité(s) — le téléphone suivra au prochain rattrapage.`);
+});
+$("nt-analyser").onclick = analyser;
+
+// ============================================================================
+// Fiches (titre, mots-clés, icône, famille)
+// ============================================================================
+async function afficherFiches() {
+  if (!S.refs) return;
+  const u = encodeURIComponent(S.user);
+  const [ss, sa] = await Promise.all([
+    tout(`t_sympt_saisies_patient?select=id_fiche&id_user=eq.${u}`),
+    tout(`t_act_saisies_patient?select=id_fiche&id_user=eq.${u}&id_fiche=not.is.null`)
+  ]);
+  const n = (liste, id) => liste.filter(s => s.id_fiche === id).length;
+  const sousCat = S.refs.sousCat.map(c => [c.code_sous_categorie, c.libelle_sous_categorie]);
+  $("fi-sympt").innerHTML = S.refs.fiches.map((f, i) => `<tr id="fs${i}">
+    <td><div class="champs">
+      <label class="champ">Icône<input data-c="icone" value="${esc(f.icone)}" style="width:60px"></label>
+      <label class="champ">Titre<input class="large" data-c="titre_conceptuel" value="${esc(f.titre_conceptuel)}"></label>
+      <label class="champ">Mots-clés<input class="large" data-c="termes_cles" value="${esc((f.termes_cles || []).join(", "))}"></label>
+      <label class="champ">Famille<select data-c="code_sous_categorie">${sousCat.map(([k, l]) => `<option value="${esc(k)}" ${k === f.code_sous_categorie ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+    </div></td>
+    <td>${n(ss, f.id_fiche)}</td>
+    <td><button class="btn" data-fs="${i}">💾</button> ${n(ss, f.id_fiche) ? "" : `<button class="btn danger" data-fs-suppr="${i}">🗑</button>`}</td></tr>`).join("");
+  $("fi-act").innerHTML = S.refs.actFiches.map((f, i) => `<tr id="fa${i}">
+    <td><div class="champs">
+      <label class="champ">Icône<input data-c="icone_fiche" value="${esc(f.icone_fiche)}" style="width:60px"></label>
+      <label class="champ">Titre<input class="large" data-c="titre_conceptuel" value="${esc(f.titre_conceptuel)}"></label>
+      <label class="champ">Mots-clés<input class="large" data-c="termes_cles" value="${esc((f.termes_cles || []).join(", "))}"></label>
+    </div></td>
+    <td>${n(sa, f.id_fiche)}</td>
+    <td><button class="btn" data-fa="${i}">💾</button></td></tr>`).join("");
+  // Mes suivis (si la table existe)
+  const mesures = await tout(`t_suivi_mesures?select=id_suivi&id_user=eq.${u}`).catch(() => []);
+  $("fi-suivis").innerHTML = (S.refs.suivis || []).map((d, i) => `<tr id="fu${i}">
+    <td><div class="champs">
+      <label class="champ">Icône<input data-c="icone" value="${esc(d.icone)}" style="width:60px"></label>
+      <label class="champ">Titre<input class="large" data-c="titre" value="${esc(d.titre)}"></label>
+      <label class="champ">${d.forme === "BILAN" ? "Ressentis" : "Niveaux"}<input class="large" data-c="${d.forme === "BILAN" ? "items" : "niveaux"}" value="${esc(d.forme === "BILAN" ? d.items : d.niveaux)}"></label>
+      <label class="champ">Heure<input type="time" data-c="heure" value="${esc((d.heure || "").slice(0, 5))}"></label>
+      ${d.forme === "BILAN" ? `<label class="champ">Mots-clés<input data-c="mots_cles" value="${esc(d.mots_cles)}"></label>` : ""}
+      <label class="champ">Actif<input type="checkbox" data-c="est_actif" ${d.est_actif ? "checked" : ""}></label>
+    </div></td>
+    <td>${mesures.filter(m => m.id_suivi === d.id_suivi).length}</td>
+    <td><button class="btn" data-fu="${i}">💾</button></td></tr>`).join("") || `<tr><td colspan="3" class="discret">Aucun suivi (Moi → Mes suivis sur le téléphone).</td></tr>`;
+}
+const lireFiche = ligne => Object.fromEntries([...ligne.querySelectorAll("[data-c]")].map(el =>
+  [el.dataset.c, el.dataset.c === "termes_cles" ? el.value.split(",").map(s => s.trim()).filter(Boolean) : el.value]));
+$("fiches").addEventListener("click", async e => {
+  const b = e.target.closest("button"); if (!b) return;
+  try {
+    if (b.dataset.fs !== undefined) {
+      const f = S.refs.fiches[+b.dataset.fs]; const v = lireFiche($("fs" + b.dataset.fs));
+      if (!v.titre_conceptuel.trim()) return message("Le titre est obligatoire.", true);
+      await modifier("t_sympt_fiches", { id_fiche: f.id_fiche }, v); Object.assign(f, v); message("Fiche enregistrée.");
+    } else if (b.dataset.fa !== undefined) {
+      const f = S.refs.actFiches[+b.dataset.fa]; const v = lireFiche($("fa" + b.dataset.fa));
+      if (!v.titre_conceptuel.trim()) return message("Le titre est obligatoire.", true);
+      await modifier("t_act_fiches", { id_fiche: f.id_fiche }, v); Object.assign(f, v); message("Fiche enregistrée.");
+    } else if (b.dataset.fu !== undefined) {
+      const d = S.refs.suivis[+b.dataset.fu];
+      const v = Object.fromEntries([...$("fu" + b.dataset.fu).querySelectorAll("[data-c]")].map(el =>
+        [el.dataset.c, el.type === "checkbox" ? el.checked : (el.value.trim() || null)]));
+      if (!v.titre) return message("Le titre est obligatoire.", true);
+      await modifier("t_suivi_definitions", { id_suivi: d.id_suivi }, v); Object.assign(d, v); message("Suivi enregistré.");
+    } else if (b.dataset.fsSuppr !== undefined) {
+      const f = S.refs.fiches[+b.dataset.fsSuppr];
+      if (!confirm(`Supprimer la fiche « ${f.titre_conceptuel} » ?`)) return;
+      await supprimer("t_sympt_fiches", { id_fiche: f.id_fiche }); await chargerRefs(); await afficherFiches(); message("Fiche supprimée.");
+    }
+  } catch (x) { message(x.message, true); }
+});
+
+// ============================================================================
+// Référentiels (communs à tous les patients) : éditeur générique, une ligne = un enregistrement
+// ============================================================================
+const REFS = [
+  ["t_act_ref_activites", "Activités", "libelle_activite"], ["t_act_ref_sous_categories", "Activités : sous-catégories", "libelle_sous_categorie"],
+  ["t_act_ref_categories", "Activités : catégories", "libelle_categorie"], ["t_act_ref_contenants", "Cadres (contenants)", "libelle_contenant"],
+  ["t_act_ref_contenant_liens", "Cadres ↔ activités", "code_contenant"],
+  ["t_sympt_ref_categories", "Symptômes : catégories", "libelle_categorie"], ["t_sympt_ref_sous_categories", "Symptômes : familles", "libelle_sous_categorie"],
+  ["t_med_ref_medicaments", "Catalogue des médicaments", "nom_commercial"], ["t_med_ref_formes", "Formes des médicaments", "code_forme"],
+  ["t_med_ref_classes", "Classes des médicaments", "code_classe"]
+];
+const RF = { table: "", lignes: [], colonnes: [] };
+const TECHNIQUES = ["dat_creation", "dat_modification"];
+
+async function chargerRef() {
+  const [table, , tri] = REFS.find(r => r[0] === $("rf-table").value);
+  RF.table = table;
+  $("rf-grille").innerHTML = `<tr><td class="discret">Chargement…</td></tr>`;
+  try {
+    RF.lignes = (await tout(`${table}?select=*`)).map(r => ({ r, nouvelle: false }))
+      .sort((a, b) => String(a.r[tri] ?? "").localeCompare(String(b.r[tri] ?? ""), "fr"));
+    RF.colonnes = [...new Set(RF.lignes.flatMap(l => Object.keys(l.r)))].filter(c => !TECHNIQUES.includes(c));
+    afficherRef();
+  } catch (e) { $("rf-grille").innerHTML = ""; message("Lecture impossible : " + e.message, true); }
+}
+
+/** Champ d'une cellule selon la valeur d'origine (case à cocher, nombre, liste « a, b », texte). */
+function champRef(c, v, i) {
+  const a = `data-i="${i}" data-c="${c}"`;
+  if (typeof v === "boolean") return `<input type="checkbox" ${a} ${v ? "checked" : ""}>`;
+  if (typeof v === "number") return `<input type="number" step="any" ${a} value="${v}">`;
+  const t = Array.isArray(v) ? v.join(", ") : (v ?? "");
+  return `<input ${a} value="${esc(t)}" style="width:${Math.min(320, Math.max(70, String(t).length * 8))}px">`;
+}
+
+function afficherRef() {
+  const filtre = $("rf-cherche").value.trim().toLowerCase();
+  $("rf-grille").innerHTML = `<thead><tr>${RF.colonnes.map(c => `<th>${esc(c)}</th>`).join("")}<th></th></tr></thead><tbody>` +
+    RF.lignes.map((l, i) => (filtre && !JSON.stringify(l.r).toLowerCase().includes(filtre)) ? "" :
+      `<tr id="rf${i}" class="${l.nouvelle ? "modifiee" : ""}">${RF.colonnes.map(c => `<td>${champRef(c, l.r[c], i)}</td>`).join("")}
+       <td><button class="btn" data-rf="${i}">💾</button></td></tr>`).join("") + "</tbody>";
+}
+
+async function enregistrerLigneRef(i) {
+  const l = RF.lignes[i];
+  const v = {};
+  $("rf" + i).querySelectorAll("[data-c]").forEach(el => {
+    const c = el.dataset.c, avant = l.r[c];
+    if (el.type === "checkbox") v[c] = el.checked;
+    else if (el.type === "number") v[c] = el.value === "" ? null : Number(el.value);
+    else if (Array.isArray(avant)) v[c] = el.value.split(",").map(s => s.trim()).filter(Boolean);
+    else v[c] = el.value.trim() === "" ? null : el.value.trim();
+  });
+  try {
+    const r = await enregistrerRef(RF.table, v);
+    l.r = v; l.nouvelle = false; afficherRef();
+    message(r === "AJOUTE" ? "Ligne ajoutée." : "Ligne modifiée.");
+  } catch (e) { message(e.message, true); }
+}
+
+$("rf-table").innerHTML = REFS.map(([t, l]) => `<option value="${t}">${esc(l)}</option>`).join("");
+$("rf-table").onchange = chargerRef;
+$("rf-cherche").oninput = afficherRef;
+$("rf-nouveau").onclick = () => {
+  // Nouvelle ligne : mêmes colonnes, vides (booléens à faux, nombres vides)
+  const modele = RF.lignes[0]?.r || {};
+  RF.lignes.unshift({ nouvelle: true, r: Object.fromEntries(RF.colonnes.map(c => [c, typeof modele[c] === "boolean" ? false : Array.isArray(modele[c]) ? [] : null])) });
+  afficherRef();
+};
+$("rf-grille").addEventListener("click", e => { const b = e.target.closest("button[data-rf]"); if (b) enregistrerLigneRef(+b.dataset.rf); });
+
+// ============================================================================
+// Vue journée (21/10) : la journée du réveil au coucher, en couloirs horizontaux (grand écran). Les éléments sont les
+// mêmes lignes que l'onglet Événements (TYPES) : mêmes champs, mêmes fonctions d'écriture, mêmes règles.
+// ============================================================================
+const J = { jour: "", lignes: [], debut: 0, fin: 0, ouverte: null, ajout: null, masques: new Set() };
+const MIN = 60_000;
+const estRepas = r => r.code_activite === "VIE_REPAS_REPAS" || /repas|d[ée]jeuner|d[îi]ner|go[ûu]ter/i.test(nomActivite(r));
+/** Groupes de filtres (comme le 👁 des frises du téléphone). */
+const GROUPES_J = [["activites", "🚶 Activités"], ["alimentation", "🍽️ Alimentation"], ["ressenti", "🧠 Ressenti"],
+  ["prises", "💊 Prises"], ["autres", "🌙 Sommeil et le reste"]];
+/** Couloirs : groupe, types qu'on y trouve (filtre), types qu'on peut y ajouter d'un clic. */
+const COULOIRS = [
+  { id: "sommeil", l: "🌙 Sommeil", g: "autres", prend: l => l.type === "nuit" || l.type === "sieste", ajout: ["sieste"] },
+  { id: "activites", l: "🚶 Activités", g: "activites", prend: l => l.type === "activite" && !estRepas(l.r), ajout: ["activite"] },
+  { id: "cigarettes", l: "🚬 Cigarettes", g: "activites", prend: l => l.type === "cigarette", ajout: ["cigarette"] },
+  { id: "alimentation", l: "🍽️ Alimentation", g: "alimentation", prend: l => (l.type === "alimentation" && val(l, "type") !== "EAU") || (l.type === "activite" && estRepas(l.r)), ajout: ["alimentation", "activite"] },
+  // 22/10 : l'eau à part (un clic = un verre de 20 cl)
+  { id: "eau", l: "💧 Eau", g: "alimentation", prend: l => l.type === "alimentation" && val(l, "type") === "EAU", ajout: ["alimentation"],
+    defaut: { type: "EAU", quantite_cl: 20, familles: null } },
+  { id: "prises", l: "💊 Prises", g: "prises", prend: l => l.type === "prise", ajout: ["prise"] },
+  { id: "corps", l: "🟢 Corps", g: "ressenti", prend: l => l.type === "etat", ajout: ["etat"] },
+  { id: "humeur", l: "😊 Humeur", g: "ressenti", prend: l => l.type === "humeur", ajout: ["humeur"] },
+  { id: "axes", l: "🧭 Élan, tension", g: "ressenti", prend: l => l.type === "axe", ajout: ["axe"] },
+  { id: "symptomes", l: "🧠 Symptômes", g: "ressenti", prend: l => l.type === "symptome", ajout: ["symptome"] },
+  { id: "suivis", l: "📋 Suivis, moments", g: "autres", prend: l => ["moment", "mesure", "evenement"].includes(l.type), ajout: ["moment", "mesure", "evenement"] }
+];
+const COULEURS_ETAT = { OFF: "#ef9a9a", ON_DG: "#ffcc80", ON_DNG: "#fff59d", ON: "#a5d6a7" };
+const COULEURS_INTENSITE = { 0: "#eceff1", 1: "#fff59d", 2: "#ffcc80", 3: "#ffa726", 4: "#e57373" };
+const COULEURS_AMBIANCE = { CALME: "#c8e6c9", CHARGE: "#ffe0b2", SURCHARGE: "#ffcdd2" };
+const COULEURS_MEDS = ["#1e88e5", "#8e24aa", "#00897b", "#f4511e", "#6d4c41", "#3949ab", "#7cb342", "#d81b60"];
+const ICONES_AXE = { ELAN: { 1: "🪫", 2: "😶", 3: "😐", 4: "🙂", 5: "🚀" }, TENSION: { 1: "😌", 2: "🙂", 3: "😬", 4: "😤", 5: "🤯" } };
+
+try { JSON.parse(localStorage.getItem("mypark_atelier_jr_masques") || "[]").forEach(g => J.masques.add(g)); } catch (e) {}
+
+/** Champ(s) d'heure qu'un glisser déplace. */
+function champsHeure(l) {
+  if (l.type === "prise") return [l.r.statut === "PRISE" || l.r.statut === "SUPPL" ? "dat_prise" : "dat_planifiee"];
+  if (l.type === "evenement") return ["dat_debut", "dat_fin"];
+  if (l.type === "nuit") return [];
+  return [TYPES[l.type].filtre];
+}
+const val = (l, c) => c in l.modifs ? l.modifs[c] : l.r[c];
+const ms = iso => iso ? new Date(iso).getTime() : null;
+
+/** Début et fin (ms) d'un élément, avec les changements pas encore enregistrés. fin null = ponctuel. */
+function etendue(l) {
+  switch (l.type) {
+    case "activite": case "symptome": { const d = ms(val(l, "dat_saisie")); const m = val(l, "duree_min"); return [d, m ? d + m * MIN : (l.type === "activite" ? d + 30 * MIN : null)]; }
+    case "sieste": { const d = ms(val(l, "dat_debut")); return [d, d + (val(l, "duree_min") || 30) * MIN]; }
+    case "nuit": return [ms(val(l, "dat_coucher")), ms(val(l, "dat_lever"))];
+    case "evenement": { const d = ms(val(l, "dat_debut")); return [d, ms(val(l, "dat_fin")) || J.fin]; }
+    case "prise": return [ms(val(l, champsHeure(l)[0])) || ms(l.r.dat_prevue), null];
+    default: return [ms(val(l, TYPES[l.type].filtre)), null];
+  }
+}
+
+const nomCourtMed = id => { const m = S.refs.meds.find(x => x.id_medicament === id); return ((m && (m.nom_commercial || m.molecule)) || "??").slice(0, 2); };
+const couleurMed = id => COULEURS_MEDS[Math.max(0, S.refs.meds.findIndex(x => x.id_medicament === id)) % COULEURS_MEDS.length];
+
+/** Aspect d'un élément : texte, classes, fond, infobulle. */
+function aspect(l) {
+  const r = l.r, T = TYPES[l.type];
+  const titre = `${T.icone} ${T.libelle} — ${T.resume({ ...r, ...l.modifs })}`;
+  switch (l.type) {
+    case "activite": {
+      const nom = nomActivite({ ...r, ...l.modifs });
+      return { texte: nom, fond: COULEURS_AMBIANCE[val(l, "ambiance")] || "#e3eff5", classes: "colore" + (val(l, "statut") === "PREVUE" ? " prevue" : ""), titre };
+    }
+    case "symptome": {
+      const f = S.refs.fiches.find(x => x.id_fiche === val(l, "id_fiche"));
+      return { texte: `${f?.icone || "⚠"} ${f?.titre_conceptuel || "?"}`, fond: COULEURS_INTENSITE[val(l, "intensite") || 0], classes: "colore", titre };
+    }
+    case "prise": {
+      const st = val(l, "statut");
+      const aConfirmer = st === "PREVU" && etendue(l)[0] < Date.now();
+      return { texte: (st === "SUPPL" ? "+" : "") + nomCourtMed(val(l, "id_medicament")), fond: couleurMed(val(l, "id_medicament")),
+        classes: "pastille" + (st === "PREVU" && !aConfirmer ? " prevue" : "") + (aConfirmer ? " aconfirmer" : "") + (st === "OUBLI" ? " oubli" : ""), titre };
+    }
+    case "etat": return { texte: (ETATS.find(e => e[0] === val(l, "etat")) || ["", "?"])[1].split(" ")[0], fond: COULEURS_ETAT[val(l, "etat")], classes: "colore", titre };
+    case "humeur": return { texte: (HUMEURS.find(h => h[0] === val(l, "score")) || ["", "?"])[1].split(" ")[0], classes: "point", titre };
+    case "axe": return { texte: ICONES_AXE[val(l, "axe")]?.[val(l, "score")] || "?", classes: "point", titre };
+    case "cigarette": return { texte: "🚬", classes: "point", titre };
+    case "alimentation": return { texte: val(l, "type") === "REPAS" ? "🍽️" : val(l, "type") === "EAU" ? "💧" : "🍪", classes: "point", titre };
+    case "nuit": return { texte: `🌙 ${heure(val(l, "dat_coucher"))} → ${heure(val(l, "dat_lever"))}`, fond: "#d1c4e9", classes: "colore fixe", titre };
+    case "sieste": return { texte: "😴 Sieste", fond: "#e1bee7", classes: "colore", titre };
+    case "evenement": return { texte: T.resume({ ...r, ...l.modifs }), fond: "#ffccbc", classes: "colore", titre };
+    case "moment": return { texte: (MOMENTS.find(m => m[0] === val(l, "type")) || ["", "?"])[1].split(" ")[0], classes: "point", titre };
+    case "mesure": return { texte: "📋", classes: "point", titre };
+  }
+  return { texte: T.icone, classes: "point", titre };
+}
+
+/** Lecture du jour : de minuit à 8 h le lendemain (la soirée peut finir après minuit), puis fenêtre réveil → coucher. */
+async function chargerJournee() {
+  if (!S.refs) return message("Connectez-vous d'abord (onglet Connexion).", true);
+  if (J.lignes.some(l => l.nouvelle || Object.keys(l.modifs).length) && !confirm("Des changements ne sont pas enregistrés. Les abandonner ?")) return;
+  J.jour = $("jr-jour").value || jourLocal(new Date());
+  const minuit = new Date(J.jour + "T00:00:00");
+  const lendemain = new Date(minuit); lendemain.setDate(lendemain.getDate() + 1);
+  const finLecture = new Date(lendemain); finLecture.setHours(8);
+  $("jr-frise").textContent = "Chargement…";
+  try {
+    const lignes = await chargerPeriode(Object.keys(TYPES), minuit.toISOString(), finLecture.toISOString());
+    // Fenêtre : lever de la nuit du jour (sinon 4 h, comme le téléphone) → coucher de la nuit suivante (sinon minuit)
+    const nuitDuJour = lignes.find(l => l.type === "nuit" && l.r.date_reveil === J.jour);
+    const nuitSuivante = lignes.find(l => l.type === "nuit" && l.r.date_reveil === jourLocal(lendemain));
+    let debut = ms(nuitDuJour?.r.dat_lever) || new Date(J.jour + "T04:00:00").getTime();
+    let fin = ms(nuitSuivante?.r.dat_coucher) || lendemain.getTime();
+    // Les éléments de la journée (après le réveil) qui dépassent minuit sans coucher noté élargissent la fenêtre
+    if (!nuitSuivante) lignes.forEach(l => { const t = ms(TYPES[l.type].temps(l.r)); if (t > fin && t < finLecture.getTime() - 4 * 3600_000) fin = t + 30 * MIN; });
+    const h = 3600_000;
+    J.debut = Math.floor((debut - 30 * MIN) / h) * h;
+    J.fin = Math.ceil((fin + 30 * MIN) / h) * h;
+    // Gardés : ce qui tombe dans la fenêtre (la nuit du jour et la suivante comprises), sans les activités annulées
+    J.lignes = lignes.filter(l => {
+      if (l.type === "nuit") return l === nuitDuJour || l === nuitSuivante;
+      if (l.type === "activite" && l.r.statut === "ANNULEE") return false;
+      const [d] = etendue(l); return d != null && d >= J.debut && d < J.fin;
+    });
+    J.ouverte = null; J.ajout = null;
+    afficherJournee();
+  } catch (e) { $("jr-frise").textContent = ""; message("Lecture impossible : " + e.message, true); }
+}
+
+/** Répartit des intervalles [d, f] sur des rangées sans chevauchement. */
+function rangees(items) {
+  const fins = [];
+  items.sort((a, b) => a.d - b.d).forEach(it => {
+    let i = fins.findIndex(f => f <= it.d);
+    if (i < 0) { i = fins.length; fins.push(0); }
+    fins[i] = it.f; it.rangee = i;
+  });
+  return Math.max(1, fins.length);
+}
+
+function afficherJournee() {
+  const duree = J.fin - J.debut;
+  const pct = t => ((t - J.debut) / duree * 100);
+  const nbHeures = Math.round(duree / 3600_000);
+  const largeur = Math.max(900, ($("jr-frise").clientWidth || 1000)) - 140;
+  const minParPx = duree / MIN / largeur;
+  $("jr-titre").textContent = J.jour ? `${jourTitre(J.jour + "T12:00:00")} · ${heure(new Date(J.debut).toISOString())} → ${heure(new Date(J.fin).toISOString())}` : "";
+  $("jr-groupes").innerHTML = GROUPES_J.map(([g, l]) =>
+    `<label class="puce ${J.masques.has(g) ? "" : "active"}"><input type="checkbox" value="${g}" ${J.masques.has(g) ? "" : "checked"}> ${l}</label>`).join("");
+
+  const fond = `background-size: calc(100% / ${nbHeures}) 100%;`;
+  let html = `<div class="jr-grille"><div class="jr-couloir jr-heures"><div></div><div class="jr-piste">`;
+  for (let k = 0; k <= nbHeures; k++) {
+    const t = J.debut + k * 3600_000;
+    html += `<span class="jr-heure" style="left:${pct(t)}%">${new Date(t).getHours()} h</span>`;
+  }
+  html += `</div></div>`;
+  const maintenant = Date.now();
+  const traitMaintenant = maintenant > J.debut && maintenant < J.fin ? `<div class="jr-maintenant" style="left:${pct(maintenant)}%"></div>` : "";
+
+  COULOIRS.filter(c => !J.masques.has(c.g)).forEach(c => {
+    const items = [];
+    J.lignes.forEach((l, i) => {
+      if (!c.prend(l)) return;
+      let [d, f] = etendue(l);
+      if (d == null) return;
+      const a = aspect(l);
+      // Corps : l'état vaut jusqu'au suivant (4 h au plus) ; ponctuels : la place de leur pastille
+      if (l.type === "etat") {
+        const suivants = J.lignes.filter(x => x.type === "etat" && etendue(x)[0] > d).map(x => etendue(x)[0]);
+        f = Math.min(suivants.length ? Math.min(...suivants) : J.fin, d + 4 * 3600_000, J.fin);
+      }
+      const ponctuel = f == null;
+      const fVisuelle = ponctuel ? d + 32 * minParPx * MIN : Math.max(f, d + 34 * minParPx * MIN);
+      items.push({ i, d: Math.max(d, J.debut), f: Math.min(fVisuelle, J.fin), ponctuel, a, l });
+    });
+    const n = rangees(items);
+    html += `<div class="jr-couloir"><div class="jr-nom">${c.l}</div>
+      <div class="jr-piste" data-couloir="${c.id}" style="height:${n * 30 + 6}px;${fond}">${traitMaintenant}`;
+    items.forEach(it => {
+      const l = it.l;
+      const modifie = l.nouvelle || Object.keys(l.modifs).length;
+      const style = `left:${pct(it.d)}%;top:${3 + it.rangee * 30}px;` + (it.ponctuel ? "" : `width:${pct(it.f) - pct(it.d)}%;`) +
+        (it.a.fond ? `background:${it.a.fond};` : "");
+      html += `<div class="jel ${it.a.classes}${modifie ? " modifie" : ""}${J.ouverte === l ? " ouvert" : ""}${it.ponctuel ? "" : ""}"
+        data-i="${it.i}" style="${style}" title="${esc(it.a.titre)}">${esc(it.a.texte)}</div>`;
+    });
+    html += `</div></div>`;
+  });
+  html += `</div>`;
+  $("jr-frise").innerHTML = html;
+  afficherResume();
+  const enAttente = J.lignes.filter(l => l.nouvelle || Object.keys(l.modifs).length).length;
+  $("jr-enregistrer").disabled = !enAttente;
+  $("jr-enregistrer").textContent = enAttente ? `💾 Enregistrer (${enAttente})` : "💾 Enregistrer";
+  $("jr-annuler").disabled = !enAttente;
+}
+
+/** Les chiffres du jour, en une ligne. */
+function afficherResume() {
+  const de = t => J.lignes.filter(l => l.type === t);
+  const hm = m => `${Math.floor(m / 60)} h ${deux(Math.round(m % 60))}`;
+  const morceaux = [];
+  const nuit = de("nuit").find(l => l.r.date_reveil === J.jour);
+  if (nuit) {
+    const [c, lv] = etendue(nuit);
+    morceaux.push(`🌙 Nuit <b>${heure(val(nuit, "dat_coucher"))} → ${heure(val(nuit, "dat_lever"))}</b> (${c && lv ? hm((lv - c) / MIN) : "?"})` +
+      (val(nuit, "qualite") ? ` · qualité ${val(nuit, "qualite")}/5` : "") + (val(nuit, "reveils") != null ? ` · ${val(nuit, "reveils")} réveil(s)` : ""));
+  }
+  const prises = de("prise");
+  const prevues = prises.filter(l => val(l, "statut") !== "SUPPL");
+  const prisesFaites = prises.filter(l => ["PRISE", "SUPPL"].includes(val(l, "statut")));
+  const aConfirmer = prises.filter(l => val(l, "statut") === "PREVU" && etendue(l)[0] < Date.now());
+  if (prises.length) morceaux.push(`💊 <b>${prisesFaites.length}</b> prise(s) / ${prevues.length} prévue(s)` +
+    (aConfirmer.length ? ` · <span style="color:var(--danger)">${aConfirmer.length} à confirmer</span>` : "") +
+    (prises.some(l => val(l, "statut") === "OUBLI") ? ` · ${prises.filter(l => val(l, "statut") === "OUBLI").length} oubli(s)` : ""));
+  const sy = de("symptome");
+  if (sy.length) morceaux.push(`🧠 <b>${sy.length}</b> symptôme(s)` + (sy.some(l => val(l, "intensite")) ? ` · le plus fort : ${INTENSITES.find(x => x[0] === Math.max(...sy.map(l => val(l, "intensite") || 0)))?.[1] || "—"}` : ""));
+  // Corps : temps passé dans chaque état (même règle que le couloir : jusqu'au suivant, 4 h au plus)
+  const etats = de("etat").map(l => ({ e: val(l, "etat"), d: etendue(l)[0] })).sort((a, b) => a.d - b.d);
+  if (etats.length) {
+    const temps = {};
+    etats.forEach((x, k) => { const f = Math.min(k + 1 < etats.length ? etats[k + 1].d : J.fin, x.d + 4 * 3600_000, J.fin); temps[x.e] = (temps[x.e] || 0) + (f - x.d) / MIN; });
+    morceaux.push("Corps : " + ETATS.filter(e => temps[e[0]]).map(e => `${e[1].split(" ")[0]} <b>${hm(temps[e[0]])}</b>`).join(" · "));
+  }
+  const moy = l => l.length ? (l.reduce((a, b) => a + b, 0) / l.length).toFixed(1) : null;
+  const hu = moy(de("humeur").map(l => val(l, "score")));
+  if (hu) morceaux.push(`😊 Humeur <b>${hu}</b>/5`);
+  AXES.forEach(([a, nom]) => { const m = moy(de("axe").filter(l => val(l, "axe") === a).map(l => val(l, "score"))); if (m) morceaux.push(`${nom} <b>${m}</b>/5`); });
+  const act = de("activite").filter(l => val(l, "statut") === "REALISEE" && !estRepas(l.r));
+  if (act.length) morceaux.push(`🚶 <b>${hm(act.reduce((s, l) => s + (val(l, "duree_min") || 0), 0))}</b> d'activités réalisées`);
+  if (de("cigarette").length) morceaux.push(`🚬 <b>${de("cigarette").length}</b>`);
+  const eau = de("alimentation").filter(l => val(l, "type") === "EAU").reduce((s, l) => s + (val(l, "quantite_cl") ?? 20), 0);
+  if (eau) morceaux.push(`💧 <b>${(eau / 100).toLocaleString("fr-FR")} l</b> d'eau`);
+  $("jr-resume").innerHTML = morceaux.length ? morceaux.map(m => `<span>${m}</span>`).join("") : `<span class="discret">Rien de noté ce jour-là.</span>`;
+}
+
+/** Volet de droite : un élément (ses champs), ou le choix du type à ajouter. */
+function afficherVolet() {
+  const v = $("jr-volet");
+  const l = J.ouverte;
+  $("jr-corps").classList.toggle("sans-volet", !l && !J.ajout);
+  v.classList.toggle("cache", !l && !J.ajout);
+  if (J.ajout) {
+    v.innerHTML = `<h2>Ajouter à ${heure(J.ajout.iso)}</h2>
+      <div class="ligne" style="flex-direction:column;align-items:stretch">${J.ajout.types.map(t =>
+        `<button class="btn" data-ajout="${t}">${TYPES[t].icone} ${TYPES[t].libelle}</button>`).join("")}</div>
+      <p><button class="btn" data-fermer>Fermer</button></p>`;
+    return;
+  }
+  if (!l) return;
+  const T = TYPES[l.type], i = J.lignes.indexOf(l);
+  const modifie = l.nouvelle || Object.keys(l.modifs).length;
+  v.innerHTML = `<h2>${T.icone} ${T.libelle}${l.nouvelle ? ' <span class="discret">(nouveau)</span>' : ""}</h2>
+    <p class="discret">${esc(T.resume({ ...l.r, ...l.modifs }))}</p>
+    <div class="champs">${T.champs.map(ch => htmlChamp(ch, l, i)).join("")}</div>
+    <div class="ligne" style="margin-top:12px">
+      <button class="btn principal" data-enreg ${modifie ? "" : "disabled"}>💾 Enregistrer</button>
+      <button class="btn danger" data-suppr>🗑 Supprimer</button>
+      <button class="btn" data-fermer>Fermer</button>
+    </div>`;
+  if (l.nouvelle) v.querySelector(".filtre-choix")?.focus();
+}
+
+$("jr-volet").addEventListener("change", ev => {
+  const el = ev.target, l = J.ouverte; if (!l || el.dataset.c === undefined) return;
+  const ch = TYPES[l.type].champs.find(x => x.c === el.dataset.c);
+  l.modifs[ch.c] = valeurSaisie(el, ch, $("jr-volet"));
+  afficherJournee();
+  $("jr-volet").querySelector("[data-enreg]").disabled = false;
+});
+$("jr-volet").addEventListener("click", async ev => {
+  const b = ev.target.closest("button"); if (!b) return;
+  if (b.dataset.fermer !== undefined) { J.ouverte = null; J.ajout = null; }
+  else if (b.dataset.ajout) {
+    const l = { type: b.dataset.ajout, r: TYPES[b.dataset.ajout].nouveau(J.ajout.iso), modifs: {}, nouvelle: true };
+    J.lignes.push(l); J.ouverte = l; J.ajout = null;
+  }
+  else if (b.dataset.enreg !== undefined) { await enregistrer([J.ouverte]); }
+  else if (b.dataset.suppr !== undefined) {
+    await supprimerLignes([J.ouverte]);
+    if (J.ouverte.supprimee) { J.lignes = J.lignes.filter(x => !x.supprimee); J.ouverte = null; }
+  }
+  afficherJournee(); afficherVolet();
+});
+
+// Glisser un élément (pas de 5 min) ; un clic sans bouger l'ouvre ; un clic dans un couloir vide propose d'y ajouter
+let glisse = null;
+$("jr-frise").addEventListener("pointerdown", ev => {
+  const el = ev.target.closest(".jel");
+  if (!el) return;
+  const l = J.lignes[+el.dataset.i];
+  glisse = { el, l, x: ev.clientX, bouge: false, piste: el.parentElement.getBoundingClientRect().width, gauche: el.offsetLeft };
+  el.setPointerCapture(ev.pointerId);
+});
+$("jr-frise").addEventListener("pointermove", ev => {
+  if (!glisse) return;
+  const dx = ev.clientX - glisse.x;
+  if (!glisse.bouge && Math.abs(dx) < 5) return;
+  if (!champsHeure(glisse.l).length) return;       // la nuit ne se glisse pas (coucher et lever dans le volet)
+  glisse.bouge = true; glisse.el.classList.add("glisse");
+  glisse.el.style.left = (glisse.gauche + dx) + "px";
+  const minutes = Math.round(dx / glisse.piste * (J.fin - J.debut) / MIN / 5) * 5;
+  const [d] = etendue(glisse.l);
+  glisse.el.title = "→ " + heure(new Date(d + minutes * MIN).toISOString());
+  glisse.minutes = minutes;
+});
+$("jr-frise").addEventListener("pointerup", ev => {
+  if (!glisse) return;
+  const g = glisse; glisse = null;
+  if (g.bouge && g.minutes) {
+    champsHeure(g.l).forEach(c => { const v = val(g.l, c); if (v) g.l.modifs[c] = new Date(ms(v) + g.minutes * MIN).toISOString(); });
+    J.ouverte = g.l; J.ajout = null;
+  } else if (!g.bouge) { J.ouverte = g.l; J.ajout = null; }
+  afficherJournee(); afficherVolet();
+});
+$("jr-frise").addEventListener("click", ev => {
+  if (ev.target.closest(".jel")) return;
+  const piste = ev.target.closest(".jr-piste[data-couloir]"); if (!piste) return;
+  const c = COULOIRS.find(x => x.id === piste.dataset.couloir);
+  const rect = piste.getBoundingClientRect();
+  let t = J.debut + (ev.clientX - rect.left) / rect.width * (J.fin - J.debut);
+  t = Math.round(t / (5 * MIN)) * 5 * MIN;
+  J.ouverte = null; J.ajout = { iso: new Date(t).toISOString(), types: c.ajout };
+  if (c.ajout.length === 1) {
+    const l = { type: c.ajout[0], r: { ...TYPES[c.ajout[0]].nouveau(J.ajout.iso), ...(c.defaut || {}) }, modifs: {}, nouvelle: true };
+    J.lignes.push(l); J.ouverte = l; J.ajout = null;
+  }
+  afficherJournee(); afficherVolet();
+});
+$("jr-groupes").addEventListener("change", e => {
+  const g = e.target.value;
+  if (e.target.checked) J.masques.delete(g); else J.masques.add(g);
+  try { localStorage.setItem("mypark_atelier_jr_masques", JSON.stringify([...J.masques])); } catch (x) {}
+  afficherJournee();
+});
+function deplacerJour(n) {
+  const d = new Date(($("jr-jour").value || jourLocal(new Date())) + "T12:00:00"); d.setDate(d.getDate() + n);
+  $("jr-jour").value = jourLocal(d); chargerJournee();
+}
+$("jr-prec").onclick = () => deplacerJour(-1);
+$("jr-suiv").onclick = () => deplacerJour(1);
+$("jr-auj").onclick = () => { $("jr-jour").value = jourLocal(new Date()); chargerJournee(); };
+$("jr-jour").onchange = chargerJournee;
+$("jr-recharger").onclick = chargerJournee;
+$("jr-enregistrer").onclick = async () => {
+  await enregistrer(J.lignes.filter(l => l.nouvelle || Object.keys(l.modifs).length));
+  afficherJournee(); afficherVolet();
+};
+$("jr-annuler").onclick = () => {
+  J.lignes = J.lignes.filter(l => !l.nouvelle); J.lignes.forEach(l => l.modifs = {});
+  if (J.ouverte && !J.lignes.includes(J.ouverte)) J.ouverte = null;
+  afficherJournee(); afficherVolet();
+};
+window.addEventListener("resize", () => { if (J.jour && !$("journee").classList.contains("cache")) afficherJournee(); });
+window.addEventListener("beforeunload", e => { if (J.lignes.some(l => l.nouvelle || Object.keys(l.modifs).length)) { e.preventDefault(); e.returnValue = ""; } });
+
+// ============================================================================
+// Soins (21/10 soir) : ordonnances (lignes, horaires), rendez-vous, médecins, lieux, médicaments.
+// Écritures : f_pc_modifier / f_pc_ajouter (script supabase_atelier_pc_v3.sql) ; le téléphone relit, régénère les prises
+// et met son agenda à jour. Pas de suppression sauf le RDV : on termine une ordonnance, on ferme un horaire.
+// ============================================================================
+const SO = { vue: "ordonnances", d: null, ouverte: null };
+const RDV_STATUTS = [["PREVU", "📅 Prévu"], ["FAIT", "✓ A eu lieu"], ["ANNULE", "✖ Annulé"]];
+const jourFr = d => d ? new Date(String(d).slice(0, 10) + "T12:00:00").toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" }) : "—";
+const nomMedecin = id => { const m = SO.d?.medecins.find(x => x.id_medecin === id); return m ? `Dr ${[m.prenom, m.nom].filter(Boolean).join(" ")}` + (m.specialite ? ` (${m.specialite})` : "") : "—"; };
+const nomLieu = id => SO.d?.lieux.find(x => x.id_lieu === id)?.libelle || "—";
+const nomMedSo = id => { const m = SO.d?.medicaments.find(x => x.id_medicament === id); return m ? [m.nom_commercial || m.molecule, m.dosage].filter(Boolean).join(" ") : null; };
+const optMedecins = () => [["", "—"], ...SO.d.medecins.map(m => [m.id_medecin, nomMedecin(m.id_medecin)])];
+const optLieux = () => [["", "—"], ...SO.d.lieux.map(l => [l.id_lieu, l.libelle])];
+/** Un champ proposé par l'IA et corrigé ici n'est plus « proposé » (comme sur le téléphone). */
+const sortirDeChampsIa = (r, v) => {
+  if (!r.champs_ia) return;
+  const reste = r.champs_ia.split(",").map(s => s.trim()).filter(c => c && !(c in v));
+  v.champs_ia = reste.length ? reste.join(",") : null;
+};
+
+const SOINS = {
+  ordonnance: { table: "t_med_ordonnances", libelle: "Ordonnance", icone: "📄", cle: ["id_ordonnance"],
+    champs: [
+      { c: "date_ordonnance", l: "Date de l'ordonnance", t: "date" },
+      { c: "id_medecin", l: "Médecin", t: "select", options: optMedecins },
+      { c: "specialite", l: "Spécialité (Neurologie…)", t: "text" },
+      { c: "est_en_cours", l: "En cours (décocher = terminée)", t: "bool" }
+    ],
+    nouveau: () => ({ id_ordonnance: nouvelId(), id_medecin: null, date_ordonnance: jourLocal(new Date()), est_en_cours: true }) },
+  ligne: { table: "t_med_lignes_ordonnance", libelle: "Ligne d'ordonnance", icone: "✍", cle: ["id_ordonnance", "num_ligne"],
+    champs: [
+      { c: "id_medicament", l: "Médicament (vide = autre prescription)", t: "select",
+        options: () => [["", "— autre prescription (kiné, lunettes…) —"], ...SO.d.medicaments.map(m => [m.id_medicament, nomMedSo(m.id_medicament)])] },
+      { c: "libelle", l: "Libellé (autre prescription)", t: "text", large: true },
+      { c: "posologie", l: "Posologie", t: "text", large: true },
+      { c: "prise", l: "Prise (texte)", t: "text", large: true },
+      { c: "duree_jours", l: "Durée du traitement (jours, vide = sans fin)", t: "number" },
+      { c: "texte_ordonnance", l: "Texte tel qu'écrit", t: "textarea" }
+    ] },
+  horaire: { table: "t_med_horaires", libelle: "Horaire de prise", icone: "⏰", cle: ["id_horaire"],
+    champs: [
+      { c: "heure_prevue", l: "Heure", t: "time" },
+      { c: "dose_prevue", l: "Dose (comprimés, par ½)", t: "number", pas: 0.5 },
+      { c: "date_debut", l: "À partir du", t: "date" },
+      { c: "date_fin", l: "Jusqu'au (vide = sans fin ; remplir = arrêter)", t: "date" }
+    ] },
+  medicament: { table: "t_med_medicaments", libelle: "Médicament", icone: "💊", cle: ["id_medicament"],
+    champs: [
+      { c: "nom_commercial", l: "Nom commercial", t: "text" },
+      { c: "molecule", l: "Molécule (DCI)", t: "text" },
+      { c: "dosage", l: "Dosage", t: "text" },
+      { c: "code_forme", l: "Forme", t: "select", options: () => SO.d.formes.map(f => [f.code_forme, `${f.icone_forme || ""} ${f.libelle_forme}`]) },
+      { c: "code_classe", l: "Classe", t: "select", options: () => SO.d.classes.map(c => [c.code_classe, c.libelle_classe]) },
+      { c: "indication", l: "À quoi il sert", t: "textarea" },
+      { c: "conseils_prise", l: "Comment le prendre", t: "textarea" },
+      { c: "effets_secondaires", l: "Effets indésirables (un par ligne)", t: "textarea" },
+      { c: "precautions", l: "Précautions (une par ligne)", t: "textarea" },
+      { c: "notes_patient", l: "Mon vécu", t: "textarea" }
+    ],
+    nouveau: () => ({ id_medicament: nouvelId(), molecule: "", code_forme: SO.d.formes[0]?.code_forme, code_classe: "AUTRE", source_infos: "PATIENT" }) },
+  medecin: { table: "t_med_medecins", libelle: "Médecin", icone: "🩺", cle: ["id_medecin"],
+    champs: [
+      { c: "prenom", l: "Prénom", t: "text" }, { c: "nom", l: "Nom", t: "text" },
+      { c: "specialite", l: "Spécialité", t: "text" },
+      { c: "infos_contact", l: "Téléphone, e-mail", t: "text", large: true },
+      { c: "adresse", l: "Adresse", t: "text", large: true },
+      { c: "numero_rpps", l: "N° RPPS", t: "text" },
+      { c: "est_medecin_traitant", l: "Médecin traitant", t: "bool" },
+      { c: "id_lieu_habituel", l: "Lieu habituel", t: "select", options: optLieux },
+      { c: "tags", l: "Mots-clés", t: "text", large: true }
+    ],
+    completer: sortirDeChampsIa,
+    nouveau: () => ({ id_medecin: nouvelId(), est_medecin_traitant: false }) },
+  lieu: { table: "t_med_lieux", libelle: "Lieu", icone: "🏥", cle: ["id_lieu"],
+    champs: [
+      { c: "libelle", l: "Établissement", t: "text", large: true },
+      { c: "adresse", l: "Adresse", t: "text", large: true },
+      { c: "telephone", l: "Téléphone", t: "text" },
+      { c: "tags", l: "Mots-clés", t: "text", large: true }
+    ],
+    completer: sortirDeChampsIa,
+    nouveau: () => ({ id_lieu: nouvelId(), libelle: "" }) },
+  rdv: { table: "t_med_rdv", libelle: "Rendez-vous", icone: "📅", cle: ["id_rdv"],
+    champs: [
+      { c: "dat_debut", l: "Date et heure", t: "datetime" },
+      { c: "duree_min", l: "Durée (min)", t: "number" },
+      { c: "id_medecin", l: "Médecin", t: "select", options: () => SO.d.medecins.map(m => [m.id_medecin, nomMedecin(m.id_medecin)]) },
+      { c: "id_lieu", l: "Lieu", t: "select", options: optLieux },
+      { c: "endroit", l: "Endroit (service, étage, salle)", t: "text", large: true },
+      { c: "motif", l: "Motif", t: "textarea" },
+      { c: "questions_a_poser", l: "Questions à poser", t: "textarea" },
+      { c: "statut", l: "Statut", t: "select", options: () => RDV_STATUTS }
+    ],
+    // Le RDV changé sur le PC est une mise à jour pour l'invitation déjà envoyée
+    completer: (r, v) => { if (Object.keys(v).length) v.sequence_ics = (r.sequence_ics || 0) + 1; },
+    nouveau: () => { const d = new Date(); d.setDate(d.getDate() + 7); d.setHours(10, 0, 0, 0);
+      return { id_rdv: nouvelId(), id_medecin: SO.d.medecins[0]?.id_medecin, id_lieu: null, dat_debut: d.toISOString(), duree_min: 30, statut: "PREVU", sequence_ics: 0 }; } },
+  // 22/10 : matériel de stimulation cérébrale profonde (carte d'implant), script supabase_atelier_pc_v4.sql
+  scp: { table: "t_scp_materiel", libelle: "Matériel SCP", icone: "🔋", cle: ["id_composant"],
+    champs: [
+      { c: "type", l: "Élément", t: "select", options: () => TYPES_SCP },
+      { c: "position", l: "Position (thorax droit, électrode gauche…)", t: "text", large: true },
+      { c: "fabricant", l: "Fabricant", t: "text" }, { c: "modele", l: "Modèle", t: "text" },
+      { c: "nom_produit", l: "Nom du produit", t: "text" }, { c: "reference", l: "Référence", t: "text" },
+      { c: "numero_serie", l: "N° de série", t: "text" }, { c: "lot", l: "Lot", t: "text" },
+      { c: "date_implantation", l: "Date d'implantation", t: "date" },
+      { c: "est_rechargeable", l: "Rechargeable", t: "bool" },
+      { c: "intervalle_recharge_j", l: "Recharger tous les … jours", t: "number" },
+      { c: "centre", l: "Centre", t: "text", large: true }, { c: "medecin", l: "Médecin", t: "text" },
+      { c: "est_actif", l: "En place (décocher = retiré, remplacé)", t: "bool" },
+      { c: "commentaire", l: "Commentaire", t: "textarea" }
+    ],
+    nouveau: () => ({ id_composant: nouvelId(), type: "STIMULATEUR", est_rechargeable: false, est_actif: true }) }
+};
+const TYPES_SCP = [["STIMULATEUR", "🔋 Stimulateur (boîtier)"], ["ELECTRODE", "〰 Électrode"], ["EXTENSION", "🔌 Extension"],
+  ["TELECOMMANDE", "📱 Télécommande"], ["CHARGEUR", "🔌 Chargeur"], ["AUTRE", "❔ Autre"]];
+// Supabase : NOT NULL sur ces champs. Une valeur vide est refusée avant l'envoi.
+const OBLIGATOIRES = { medicament: ["molecule", "code_forme"], lieu: ["libelle"], rdv: ["id_medecin", "dat_debut"], horaire: ["heure_prevue"], ordonnance: ["date_ordonnance"] };
+
+const VUES_SOINS = [["ordonnances", "📄 Ordonnances"], ["rdv", "📅 Rendez-vous"], ["annuaire", "🩺 Médecins et lieux"], ["medicaments", "💊 Médicaments"],
+  ["scp", "🔋 Stimulation (SCP)"]];
+
+async function chargerSoins() {
+  if (!S.refs) return;
+  const u = encodeURIComponent(S.user);
+  $("so-liste").textContent = "Chargement…";
+  try {
+    const [lieux, medecins, medicaments, ordonnances, lignes, horaires, rdv, formes, classes] = await Promise.all([
+      tout(`t_med_lieux?select=*&id_user=eq.${u}&order=libelle`),
+      tout(`t_med_medecins?select=*&id_user=eq.${u}&order=nom`),
+      tout(`t_med_medicaments?select=*&id_user=eq.${u}&order=nom_commercial`),
+      tout(`t_med_ordonnances?select=*&id_user=eq.${u}&order=date_ordonnance.desc`),
+      tout(`t_med_lignes_ordonnance?select=*&id_user=eq.${u}&order=num_ligne`),
+      tout(`t_med_horaires?select=*&id_user=eq.${u}&order=heure_prevue`),
+      tout(`t_med_rdv?select=*&id_user=eq.${u}&order=dat_debut`),
+      tout(`t_med_ref_formes?select=*&order=libelle_forme`),
+      tout(`t_med_ref_classes?select=*&order=libelle_classe`)
+    ]);
+    // Matériel SCP (supabase_scp.sql) : facultatif, la page marche sans
+    const scp = await tout(`t_scp_materiel?select=*&id_user=eq.${u}&order=type`).catch(() => []);
+    SO.d = { lieux, medecins, medicaments, ordonnances, lignes, horaires, rdv, formes, classes, scp };
+    afficherSoins();
+  } catch (e) { $("so-liste").textContent = ""; message("Lecture impossible : " + e.message, true); }
+}
+
+/** Les lignes de SO.d d'un type (tableau à mettre à jour après un enregistrement). */
+const tableauSo = type => ({ ordonnance: "ordonnances", ligne: "lignes", horaire: "horaires", medicament: "medicaments",
+  medecin: "medecins", lieu: "lieux", rdv: "rdv", scp: "scp" }[type]);
+/** Élément ouvert ? (même ligne de la base) */
+const estOuvert = (type, r) => SO.ouverte && SO.ouverte.type === type && SOINS[type].cle.every(k => SO.ouverte.r[k] === r[k]);
+const attrs = (type, idx) => `class="cliquable" data-so="${type}" data-idx="${idx}"`;
+
+function afficherSoins() {
+  $("so-vues").innerHTML = VUES_SOINS.map(([v, l]) => `<button class="btn ${SO.vue === v ? "principal" : ""}" data-vue="${v}">${l}</button>`).join(" ");
+  $("so-nouveau").textContent = { ordonnances: "＋ Nouvelle ordonnance", rdv: "＋ Nouveau rendez-vous", annuaire: "＋ Nouveau médecin",
+    medicaments: "＋ Nouveau médicament", scp: "＋ Nouvel élément" }[SO.vue];
+  $("so-anciens-puce").classList.toggle("cache", !["ordonnances", "rdv"].includes(SO.vue));
+  if (!SO.d) return;
+  const anciens = $("so-anciens").checked;
+  const d = SO.d;
+  let h = "";
+  if (SO.vue === "ordonnances") {
+    const ordos = d.ordonnances.filter(o => anciens || o.est_en_cours);
+    h = `<h2>Ordonnances ${anciens ? "" : "en cours"} <span class="discret">(${ordos.length})</span></h2>`;
+    ordos.forEach(o => {
+      const oi = d.ordonnances.indexOf(o);
+      const lignes = d.lignes.filter(l => l.id_ordonnance === o.id_ordonnance).sort((a, b) => a.num_ligne - b.num_ligne);
+      h += `<div class="so-ordo ${o.est_en_cours ? "" : "terminee"}">
+        <h3><span ${attrs("ordonnance", oi)}>📄 ${jourFr(o.date_ordonnance)} · ${esc(nomMedecin(o.id_medecin))}${o.specialite ? ` · ${esc(o.specialite)}` : ""}</span>
+          ${o.est_en_cours ? '<span class="discret">✓ en cours</span>' : '<span class="discret">terminée</span>'}
+          <button class="btn" data-ajout-ligne="${oi}" style="margin-left:auto">＋ Ligne</button></h3>`;
+      if (!lignes.length) h += `<div class="discret">Aucune ligne.</div>`;
+      lignes.forEach(l => {
+        const li = d.lignes.indexOf(l);
+        const hors = d.horaires.filter(x => x.id_ordonnance === l.id_ordonnance && x.num_ligne === l.num_ligne);
+        const aujourdHui = jourLocal(new Date());
+        h += `<div class="so-lig"><div><b ${attrs("ligne", li)}>${l.num_ligne}. ${esc(nomMedSo(l.id_medicament) || l.libelle || "?")}</b>
+            ${l.posologie ? ` · ${esc(l.posologie)}` : ""}${l.duree_jours ? ` · <span class="discret">${l.duree_jours} jours</span>` : ""}</div>
+          <div>${hors.map(x => {
+            const ferme = x.date_fin && x.date_fin < aujourdHui;
+            return `<span class="so-hor ${ferme ? "ferme" : ""}" data-so="horaire" data-idx="${d.horaires.indexOf(x)}"
+              title="${x.date_debut ? "depuis le " + jourFr(x.date_debut) : ""}${x.date_fin ? " jusqu'au " + jourFr(x.date_fin) : ""}">⏰ ${String(x.heure_prevue).slice(0, 5)} × ${x.dose_prevue}</span>`;
+          }).join("")}
+          ${l.id_medicament ? `<button class="btn" data-ajout-horaire="${li}" style="padding:2px 8px;font-size:13px">＋ heure</button>` : ""}</div></div>`;
+      });
+      h += `</div>`;
+    });
+  } else if (SO.vue === "rdv") {
+    const maintenant = new Date().toISOString();
+    const liste = d.rdv.filter(r => anciens || r.dat_debut >= maintenant || r.statut === "PREVU");
+    h = `<h2>Rendez-vous ${anciens ? "" : "à venir (et prévus non confirmés)"} <span class="discret">(${liste.length})</span></h2><table><tbody>`;
+    liste.slice().sort((a, b) => a.dat_debut.localeCompare(b.dat_debut)).forEach(r => {
+      const passe = r.dat_debut < maintenant;
+      h += `<tr ${attrs("rdv", d.rdv.indexOf(r))}><td class="heure">${jourTitre(r.dat_debut)}<br>${heure(r.dat_debut)}</td>
+        <td><b>${esc(nomMedecin(r.id_medecin))}</b><div class="discret">${esc(nomLieu(r.id_lieu))}${r.endroit ? " · " + esc(r.endroit) : ""}</div></td>
+        <td>${esc(r.motif || "")}</td>
+        <td>${(RDV_STATUTS.find(s => s[0] === r.statut) || ["", r.statut])[1]}${passe && r.statut === "PREVU" ? '<div style="color:var(--danger)">a-t-il eu lieu ?</div>' : ""}</td></tr>`;
+    });
+    h += `</tbody></table>`;
+  } else if (SO.vue === "annuaire") {
+    h = `<h2>Médecins <span class="discret">(${d.medecins.length})</span></h2><table><tbody>`;
+    d.medecins.forEach((m, i) => {
+      h += `<tr ${attrs("medecin", i)}><td><b>${esc(nomMedecin(m.id_medecin))}</b>${m.est_medecin_traitant ? " · traitant" : ""}${m.champs_ia ? ' <span class="discret">✨ à confirmer : ' + esc(m.champs_ia) + "</span>" : ""}
+        <div class="discret">${esc([m.infos_contact, m.adresse].filter(Boolean).join(" · "))}</div></td>
+        <td class="discret">${esc(nomLieu(m.id_lieu_habituel))}</td>
+        <td class="discret">${d.rdv.filter(r => r.id_medecin === m.id_medecin).length} RDV · ${d.ordonnances.filter(o => o.id_medecin === m.id_medecin).length} ordonnance(s)</td></tr>`;
+    });
+    h += `</tbody></table><h2 style="margin-top:18px">Lieux <span class="discret">(${d.lieux.length})</span>
+      <button class="btn" data-ajout-lieu style="margin-left:8px">＋ Nouveau lieu</button></h2><table><tbody>`;
+    d.lieux.forEach((l, i) => {
+      h += `<tr ${attrs("lieu", i)}><td><b>🏥 ${esc(l.libelle)}</b>${l.champs_ia ? ' <span class="discret">✨ à confirmer : ' + esc(l.champs_ia) + "</span>" : ""}
+        <div class="discret">${esc([l.adresse, l.telephone].filter(Boolean).join(" · "))}</div></td></tr>`;
+    });
+    h += `</tbody></table>`;
+  } else if (SO.vue === "scp") {
+    h = `<h2>Matériel de stimulation <span class="discret">(${d.scp.length})</span></h2>
+      <p class="discret">Recopiez la carte d'implant. Un élément remplacé : décochez « En place » plutôt que de le supprimer.</p><table><tbody>`;
+    d.scp.forEach((m, i) => {
+      h += `<tr ${attrs("scp", i)} ${m.est_actif ? "" : 'style="opacity:.55"'}><td><b>${esc((TYPES_SCP.find(t => t[0] === m.type) || ["", m.type])[1])}</b>
+        ${m.position ? " · " + esc(m.position) : ""}${m.est_actif ? "" : " · retiré"}
+        <div class="discret">${esc([m.fabricant, m.modele, m.nom_produit].filter(Boolean).join(" "))}${m.numero_serie ? " · SN " + esc(m.numero_serie) : ""}</div></td>
+        <td class="discret">${m.date_implantation ? "posé le " + jourFr(m.date_implantation) : ""}${m.est_rechargeable ? ` · recharge tous les ${m.intervalle_recharge_j || "?"} j` : ""}</td></tr>`;
+    });
+    if (!d.scp.length) h += `<tr><td class="discret">Aucun élément.</td></tr>`;
+    h += `</tbody></table>`;
+  } else {
+    h = `<h2>Médicaments <span class="discret">(${d.medicaments.length})</span></h2><table><tbody>`;
+    d.medicaments.forEach((m, i) => {
+      const forme = d.formes.find(f => f.code_forme === m.code_forme);
+      const enCours = d.lignes.some(l => l.id_medicament === m.id_medicament && d.ordonnances.find(o => o.id_ordonnance === l.id_ordonnance)?.est_en_cours);
+      h += `<tr ${attrs("medicament", i)}><td><b>${esc(forme?.icone_forme || "💊")} ${esc(nomMedSo(m.id_medicament))}</b>
+        <div class="discret">${esc(m.molecule)} · ${esc(forme?.libelle_forme || m.code_forme)} · ${esc(d.classes.find(c => c.code_classe === m.code_classe)?.libelle_classe || m.code_classe)}</div></td>
+        <td class="discret">${enCours ? "✓ sur une ordonnance en cours" : ""}</td></tr>`;
+    });
+    h += `</tbody></table>`;
+  }
+  $("so-liste").innerHTML = h;
+  // Élément ouvert surligné
+  if (SO.ouverte && !SO.ouverte.nouvelle) {
+    const tab = SO.d[tableauSo(SO.ouverte.type)];
+    const idx = tab.findIndex(r => estOuvert(SO.ouverte.type, r));
+    $("so-liste").querySelector(`[data-so="${SO.ouverte.type}"][data-idx="${idx}"]`)?.classList.add("ouvert-so");
+  }
+}
+
+function ouvrirSoin(type, r, nouvelle = false) {
+  SO.ouverte = { type, r: nouvelle ? r : { ...r }, modifs: {}, nouvelle };
+  afficherVoletSoin(); afficherSoins();
+}
+
+function afficherVoletSoin() {
+  const v = $("so-volet"), l = SO.ouverte;
+  $("so-corps").classList.toggle("sans-volet", !l);
+  v.classList.toggle("cache", !l);
+  if (!l) return;
+  const T = SOINS[l.type];
+  const modifie = l.nouvelle || Object.keys(l.modifs).length;
+  let contexte = "";
+  if (l.type === "ligne" || l.type === "horaire") {
+    const o = SO.d.ordonnances.find(x => x.id_ordonnance === l.r.id_ordonnance);
+    contexte = `Ordonnance du ${jourFr(o?.date_ordonnance)} · ${esc(nomMedecin(o?.id_medecin))}`;
+    if (l.type === "horaire") {
+      const lg = SO.d.lignes.find(x => x.id_ordonnance === l.r.id_ordonnance && x.num_ligne === l.r.num_ligne);
+      contexte += `<br>${esc(nomMedSo(lg?.id_medicament) || lg?.libelle || "")}`;
+    }
+  }
+  const suppr = l.type === "rdv" && !l.nouvelle;
+  v.innerHTML = `<h2>${T.icone} ${T.libelle}${l.nouvelle ? ' <span class="discret">(nouveau)</span>' : ""}</h2>
+    ${contexte ? `<p class="discret">${contexte}</p>` : ""}
+    ${l.r.champs_ia ? `<p class="discret">✨ Proposé par l'IA, à vérifier : ${esc(l.r.champs_ia)}. Corriger un champ le confirme.</p>` : ""}
+    <div class="champs">${T.champs.map(ch => htmlChamp(ch, l, 0)).join("")}</div>
+    ${l.type === "horaire" && !l.nouvelle && !val(l, "date_fin") ? `<p><button class="btn" data-arreter>⏹ Arrêter cette prise à partir d'aujourd'hui</button></p>` : ""}
+    ${l.type === "ordonnance" && !l.nouvelle ? `<p class="discret">Décocher « En cours » = ordonnance terminée : ses prises ne sont plus prévues sur le téléphone.</p>` : ""}
+    <div class="ligne" style="margin-top:12px">
+      <button class="btn principal" data-enreg ${modifie ? "" : "disabled"}>💾 Enregistrer</button>
+      ${suppr ? `<button class="btn danger" data-suppr>🗑 Supprimer</button>` : ""}
+      <button class="btn" data-fermer>Fermer</button>
+    </div>
+    <p class="discret">Le téléphone reprend le changement au rattrapage suivant${["ordonnance", "ligne", "horaire", "medicament"].includes(l.type) ? " et régénère les prises d'aujourd'hui et de demain" : ""}${l.type === "rdv" ? " et met son agenda à jour" : ""}.</p>`;
+}
+
+$("so-volet").addEventListener("change", ev => {
+  const el = ev.target, l = SO.ouverte; if (!l || el.dataset.c === undefined) return;
+  const ch = SOINS[l.type].champs.find(x => x.c === el.dataset.c);
+  const v = valeurSaisie(el, ch, $("so-volet"));
+  // Select « — » d'une clé étrangère facultative = NULL
+  l.modifs[ch.c] = v === "" ? null : v;
+  $("so-volet").querySelector("[data-enreg]").disabled = false;
+});
+
+async function enregistrerSoin() {
+  const l = SO.ouverte;
+  const manque = (OBLIGATOIRES[l.type] || []).find(c => { const x = val(l, c); return x == null || x === ""; });
+  if (manque) return message(`Champ obligatoire : ${SOINS[l.type].champs.find(c => c.c === manque)?.l || manque}`, true);
+  // Garde-fou (22/10) : terminer une ordonnance qui donne des prises supprime aussi ses alarmes sur le téléphone
+  if (l.type === "ordonnance" && !l.nouvelle && l.r.est_en_cours && l.modifs.est_en_cours === false) {
+    const aujourdHui = jourLocal(new Date());
+    const donnePrises = o => SO.d.horaires.some(h => h.id_ordonnance === o.id_ordonnance && (!h.date_fin || h.date_fin >= aujourdHui)
+      && SO.d.lignes.some(lg => lg.id_ordonnance === o.id_ordonnance && lg.num_ligne === h.num_ligne && lg.id_medicament));
+    if (donnePrises(l.r)) {
+      const autres = SO.d.ordonnances.filter(o => o.id_ordonnance !== l.r.id_ordonnance && o.est_en_cours && donnePrises(o));
+      const texte = autres.length
+        ? "Cette ordonnance sera terminée : ses prises et leurs alarmes disparaîtront du téléphone.\n\nContinuer ?"
+        : "⚠ Plus AUCUNE ordonnance en cours ne donnera de prise : le téléphone n'aura plus aucune prise prévue, "
+          + "donc plus aucune alarme de médicament.\n\nTerminer quand même cette ordonnance ?";
+      if (!confirm(texte)) return;
+    }
+  }
+  const etaitNouvelle = l.nouvelle;
+  await enregistrer([l]);
+  if (l.nouvelle || Object.keys(l.modifs).length) return;     // échec : message déjà affiché, le volet reste ouvert
+  const tab = SO.d[tableauSo(l.type)];
+  if (etaitNouvelle) tab.push(l.r);
+  else { const i = tab.findIndex(r => estOuvert(l.type, r)); if (i >= 0) tab[i] = { ...tab[i], ...l.r }; }
+  SO.ouverte = { ...l, r: { ...l.r }, modifs: {}, nouvelle: false };
+  afficherSoins(); afficherVoletSoin();
+}
+
+$("so-volet").addEventListener("click", async ev => {
+  const b = ev.target.closest("button"); if (!b) return;
+  const l = SO.ouverte;
+  if (b.dataset.fermer !== undefined) { SO.ouverte = null; afficherVoletSoin(); afficherSoins(); }
+  else if (b.dataset.arreter !== undefined) {
+    // Fermer l'horaire hier : plus de prise prévue à partir d'aujourd'hui (Supabase exige fin ≥ début)
+    const hier = new Date(); hier.setDate(hier.getDate() - 1);
+    const debut = val(l, "date_debut");
+    l.modifs.date_fin = debut && debut > jourLocal(hier) ? debut : jourLocal(hier);
+    afficherVoletSoin();
+  }
+  else if (b.dataset.enreg !== undefined) await enregistrerSoin();
+  else if (b.dataset.suppr !== undefined) {
+    if (!confirm("Supprimer ce rendez-vous ? (pour garder une trace, préférez le statut « Annulé »)")) return;
+    try {
+      const n = await supprimer("t_med_rdv", { id_rdv: l.r.id_rdv });
+      if (n > 0) { SO.d.rdv = SO.d.rdv.filter(r => r.id_rdv !== l.r.id_rdv); SO.ouverte = null; message("Rendez-vous supprimé."); }
+    } catch (e) { message(e.message, true); }
+    afficherVoletSoin(); afficherSoins();
+  }
+});
+
+$("so-liste").addEventListener("click", ev => {
+  const b = ev.target.closest("button");
+  const d = SO.d; if (!d) return;
+  if (b && b.dataset.ajoutLigne !== undefined) {
+    const o = d.ordonnances[+b.dataset.ajoutLigne];
+    const n = Math.max(0, ...d.lignes.filter(l => l.id_ordonnance === o.id_ordonnance).map(l => l.num_ligne)) + 1;
+    return ouvrirSoin("ligne", { id_ordonnance: o.id_ordonnance, num_ligne: n, id_medicament: d.medicaments[0]?.id_medicament || null }, true);
+  }
+  if (b && b.dataset.ajoutHoraire !== undefined) {
+    const lg = d.lignes[+b.dataset.ajoutHoraire];
+    return ouvrirSoin("horaire", { id_horaire: nouvelId(), id_ordonnance: lg.id_ordonnance, num_ligne: lg.num_ligne,
+      heure_prevue: "08:00", dose_prevue: 1, date_debut: jourLocal(new Date()), date_fin: null }, true);
+  }
+  if (b && b.dataset.ajoutLieu !== undefined) return ouvrirSoin("lieu", SOINS.lieu.nouveau(), true);
+  const el = ev.target.closest("[data-so]"); if (!el) return;
+  const type = el.dataset.so;
+  ouvrirSoin(type, d[tableauSo(type)][+el.dataset.idx]);
+});
+$("so-vues").addEventListener("click", e => {
+  const b = e.target.closest("button[data-vue]"); if (!b) return;
+  SO.vue = b.dataset.vue; SO.ouverte = null; afficherVoletSoin(); afficherSoins();
+});
+$("so-anciens").onchange = afficherSoins;
+$("so-recharger").onclick = chargerSoins;
+$("so-nouveau").onclick = () => {
+  if (!SO.d) return message("Connectez-vous d'abord (onglet Connexion).", true);
+  const type = { ordonnances: "ordonnance", rdv: "rdv", annuaire: "medecin", medicaments: "medicament", scp: "scp" }[SO.vue];
+  if (type === "rdv" && !SO.d.medecins.length) return message("Créez d'abord le médecin (Médecins et lieux).", true);
+  ouvrirSoin(type, SOINS[type].nouveau(), true);
+};
+
+// ============================================================================
+// Test de frappe (22/10) : mêmes phrases et mêmes calculs que TestsSuivi.kt du téléphone ; enregistré comme mesure
+// du suivi « Test de frappe » du patient (t_suivi_mesures, f_pc_ajouter), avec appareil = PC.
+// ============================================================================
+const PHRASES_FRAPPE = [
+  "le petit chat dort au soleil pres de la fenetre du salon",
+  "nous irons marcher le long de la riviere apres le dejeuner",
+  "il faut acheter du pain des pommes et un peu de fromage",
+  "la voiture bleue est garee devant la porte de la maison",
+  "chaque matin je bois un grand verre d eau avant le cafe",
+  "le vent souffle fort sur la plage et les vagues sont hautes"
+];
+const PAUSE_MS = 1500, DUREE_MAX_FRAPPE_MS = 45000;
+const FR = { etape: 0, phrase: "", debut: 0, instants: [], saisi: "", resultat: null, minuteur: null };
+
+function levenshtein(a, b) {
+  let prec = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cour = [i];
+    for (let j = 1; j <= b.length; j++) cour[j] = Math.min(cour[j - 1] + 1, prec[j] + 1, prec[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prec = cour;
+  }
+  return prec[b.length];
+}
+
+function analyserFrappe(phrase, saisi, instants, debut, fin) {
+  const duree = Math.max(1, fin - debut) / 1000;
+  const intervalles = instants.slice(1).map((t, k) => t - instants[k]);
+  const normaux = intervalles.filter(x => x < PAUSE_MS);
+  const moyenne = normaux.length ? normaux.reduce((s, x) => s + x, 0) / normaux.length : 0;
+  const ecart = normaux.length > 1 ? Math.sqrt(normaux.reduce((s, x) => s + (x - moyenne) ** 2, 0) / (normaux.length - 1)) : 0;
+  return {
+    cpm: Math.round(saisi.length * 60 / duree),
+    erreurs: levenshtein(saisi.trim(), phrase.slice(0, saisi.trim().length)),
+    regularite: moyenne > 0 ? Math.round(ecart / moyenne * 100) : 0,
+    pauses: intervalles.filter(x => x >= PAUSE_MS).length,
+    dureeS: Math.round(duree), caracteres: saisi.length
+  };
+}
+
+const suiviFrappe = () => (S.refs?.suivis || []).find(d => d.forme === "TEST_FRAPPE");
+
+function preparerFrappe() {
+  clearTimeout(FR.minuteur);
+  Object.assign(FR, { etape: 0, phrase: PHRASES_FRAPPE[Math.floor(Math.random() * PHRASES_FRAPPE.length)], debut: 0, instants: [], saisi: "", resultat: null });
+  afficherFrappe();
+}
+
+function terminerFrappe() {
+  if (FR.etape !== 1) return;
+  clearTimeout(FR.minuteur);
+  const fin = FR.instants.length ? FR.instants[FR.instants.length - 1] : Date.now();
+  FR.resultat = analyserFrappe(FR.phrase, FR.saisi, FR.instants, FR.debut || fin, fin);
+  FR.etape = 2; afficherFrappe();
+}
+
+function afficherFrappe() {
+  const z = $("fr-zone");
+  if (!S.refs) { z.innerHTML = `<p class="discret">Connectez-vous d'abord (onglet Connexion).</p>`; return; }
+  if (!suiviFrappe()) {
+    z.innerHTML = `<p>Le suivi « Test de frappe » n'existe pas encore pour ce patient : ajoutez-le sur le téléphone
+      (Moi → Mes suivis → ＋ Ajouter un suivi → ⏱️ Test de frappe), puis rechargez cette page.</p>`;
+    return;
+  }
+  if (FR.etape === 0) {
+    z.innerHTML = `<p><button class="btn principal" id="fr-commencer">Commencer</button></p>`;
+    $("fr-commencer").onclick = () => { FR.etape = 1; afficherFrappe(); };
+  } else if (FR.etape === 1) {
+    z.innerHTML = `<p style="font-size:22px;line-height:1.5;background:var(--accent-doux);color:var(--encre);padding:14px;border-radius:12px;user-select:none">${esc(FR.phrase)}</p>
+      <input id="fr-saisie" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+        style="width:100%;font-size:22px;padding:10px;background:var(--carte);color:var(--encre);border:1px solid var(--trait);border-radius:8px" placeholder="Recopiez ici">
+      <p><button class="btn" id="fr-fini">J'ai fini</button></p>`;
+    const champ = $("fr-saisie");
+    champ.focus();
+    champ.onpaste = e => e.preventDefault();          // un collage fausserait la mesure
+    champ.oninput = () => {
+      const t = Date.now(), v = champ.value;
+      if (!FR.debut && v.length) { FR.debut = t; FR.minuteur = setTimeout(terminerFrappe, DUREE_MAX_FRAPPE_MS); }
+      for (let k = FR.saisi.length; k < v.length; k++) FR.instants.push(t);
+      FR.saisi = v;
+      if (v.length >= FR.phrase.length) terminerFrappe();
+    };
+    $("fr-fini").onclick = terminerFrappe;
+  } else {
+    const r = FR.resultat;
+    z.innerHTML = `<h3>Résultat</h3>
+      <p style="font-size:24px"><b>${r.cpm}</b> caractères par minute</p>
+      <p>${r.erreurs} erreur(s) · ${r.pauses} pause(s) de plus d'une seconde et demie · irrégularité ${r.regularite} %</p>
+      <p class="discret">L'irrégularité mesure combien le temps entre deux frappes varie (plus bas = plus régulier).</p>
+      <p class="ligne"><button class="btn principal" id="fr-enreg">💾 Enregistrer</button>
+        <button class="btn" id="fr-refaire">Ne pas enregistrer, recommencer</button></p>`;
+    $("fr-refaire").onclick = preparerFrappe;
+    $("fr-enreg").onclick = async () => {
+      const details = { erreurs: String(r.erreurs), regularite: String(r.regularite), pauses: String(r.pauses),
+        duree_s: String(r.dureeS), caracteres: String(r.caracteres), phrase: String(PHRASES_FRAPPE.indexOf(FR.phrase)), appareil: "PC" };
+      try {
+        await ajouter("t_suivi_mesures", { id_mesure: nouvelId(), id_suivi: suiviFrappe().id_suivi, dat_mesure: maintenantIso(),
+          valeur: r.cpm, details: JSON.stringify(details), commentaire: "Clavier du PC", dat_saisie: maintenantIso() });
+        message("⏱️ Test enregistré — le téléphone le reprendra au prochain rattrapage.");
+        preparerFrappe();
+      } catch (e) { message("Enregistrement impossible : " + e.message, true); }
+    };
+  }
+}
+
+// ============================================================================
+// Test de voix (22/10) : même texte et mêmes calculs que TestsSuivi.kt (trames de 50 ms en dB pleine échelle ; fond = 10e
+// centile ; parlé = fond + 10 dB). Micro du navigateur SANS réglage automatique du volume (sinon la mesure ne veut rien dire).
+// Le son n'est jamais enregistré. Mesure du suivi « Test de voix », appareil = PC.
+// ============================================================================
+const TEXTE_VOIX = "Le matin, je bois mon café en regardant les oiseaux du jardin. " +
+  "Ensuite, je prépare mon sac et je pars marcher jusqu'au bout de la rue, puis je reviens tranquillement.";
+const DUREE_MAX_VOIX_MS = 20000;
+const VX = { etape: 0, trames: [], flux: null, contexte: null, minuteur: null, arret: null, resultat: null, echec: null };
+
+function analyserVoix(trames) {
+  if (trames.length < 20) return null;
+  const fond = trames.slice().sort((a, b) => a - b)[Math.floor(trames.length / 10)];
+  const parlees = trames.map((t, i) => t > fond + 10 ? i : -1).filter(i => i >= 0);
+  if (parlees.length < 10) return null;
+  const premiere = parlees[0], derniere = parlees[parlees.length - 1];
+  const volumes = parlees.map(i => trames[i]);
+  const moyenne = volumes.reduce((s, x) => s + x, 0) / volumes.length;
+  const ecart = Math.sqrt(volumes.reduce((s, x) => s + (x - moyenne) ** 2, 0) / volumes.length);
+  return { niveauDb: moyenne, partParlee: Math.floor(parlees.length * 100 / (derniere - premiere + 1)),
+    variationDb: ecart, dureeS: (derniere - premiere + 1) * 0.05 };
+}
+
+const suiviVoix = () => (S.refs?.suivis || []).find(d => d.forme === "TEST_VOIX");
+
+function arreterVoix() {
+  clearInterval(VX.minuteur); clearTimeout(VX.arret);
+  VX.flux?.getTracks().forEach(t => t.stop()); VX.flux = null;
+  VX.contexte?.close().catch(() => {}); VX.contexte = null;
+}
+
+function preparerVoix() {
+  arreterVoix();
+  Object.assign(VX, { etape: 0, trames: [], resultat: null });
+  afficherVoix();
+}
+
+async function commencerVoix() {
+  VX.echec = null;
+  try {
+    VX.flux = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch (e) { VX.echec = "Le micro n'est pas disponible ou l'accès a été refusé (" + e.message + ")."; return afficherVoix(); }
+  VX.contexte = new AudioContext();
+  const source = VX.contexte.createMediaStreamSource(VX.flux);
+  const analyseur = VX.contexte.createAnalyser();
+  analyseur.fftSize = 2048;                          // ≈ 43 ms à 48 kHz : une trame par relevé
+  source.connect(analyseur);
+  const tampon = new Float32Array(analyseur.fftSize);
+  VX.trames = []; VX.etape = 1; afficherVoix();
+  VX.minuteur = setInterval(() => {
+    analyseur.getFloatTimeDomainData(tampon);
+    let somme = 0; for (const x of tampon) somme += x * x;
+    const db = 20 * Math.log10(Math.max(Math.sqrt(somme / tampon.length), 1e-6));
+    VX.trames.push(db);
+    const barre = $("vx-niveau"); if (barre) barre.style.width = Math.min(100, Math.max(0, (db + 60) / 60 * 100)) + "%";
+  }, 50);
+  VX.arret = setTimeout(finirVoix, DUREE_MAX_VOIX_MS);
+}
+
+function finirVoix() {
+  if (VX.etape !== 1) return;
+  arreterVoix();
+  VX.resultat = analyserVoix(VX.trames);
+  if (!VX.resultat) { VX.echec = "Je n'ai pas assez entendu votre voix. Rapprochez-vous du micro et recommencez."; VX.etape = 0; }
+  else VX.etape = 2;
+  afficherVoix();
+}
+
+function afficherVoix() {
+  const z = $("vx-zone");
+  if (!S.refs) { z.innerHTML = `<p class="discret">Connectez-vous d'abord (onglet Connexion).</p>`; return; }
+  if (!suiviVoix()) {
+    z.innerHTML = `<p>Le suivi « Test de voix » n'existe pas encore pour ce patient : ajoutez-le sur le téléphone
+      (Moi → Mes suivis → ＋ Ajouter un suivi → 🎙️ Test de voix), puis rechargez cette page.</p>`;
+    return;
+  }
+  if (VX.etape === 0) {
+    z.innerHTML = (VX.echec ? `<p style="color:var(--danger)">${esc(VX.echec)}</p>` : "") +
+      `<p><button class="btn principal" id="vx-commencer">🎙️ Commencer</button></p>`;
+    $("vx-commencer").onclick = commencerVoix;
+  } else if (VX.etape === 1) {
+    z.innerHTML = `<p style="font-size:22px;line-height:1.6;background:var(--accent-doux);color:var(--encre);padding:14px;border-radius:12px">${esc(TEXTE_VOIX)}</p>
+      <div style="height:18px;background:var(--trait);border-radius:9px;overflow:hidden;margin:8px 0">
+        <div id="vx-niveau" style="height:100%;width:0;background:var(--accent);transition:width .05s"></div></div>
+      <p><button class="btn principal" id="vx-fini">J'ai fini de lire</button></p>`;
+    $("vx-fini").onclick = finirVoix;
+  } else {
+    const r = VX.resultat;
+    z.innerHTML = `<h3>Résultat</h3>
+      <p style="font-size:24px">Volume moyen : <b>${Math.round(r.niveauDb)} dB</b></p>
+      <p>Temps parlé : ${r.partParlee} % · variation du volume : ±${Math.round(r.variationDb)} dB · lecture en ${Math.round(r.dureeS)} s</p>
+      <p class="discret">Le volume est relatif (0 dB = le plus fort possible pour le micro) : ce qui compte, c'est l'évolution d'une
+        semaine à l'autre.</p>
+      <p class="ligne"><button class="btn principal" id="vx-enreg">💾 Enregistrer</button>
+        <button class="btn" id="vx-refaire">Ne pas enregistrer, recommencer</button></p>`;
+    $("vx-refaire").onclick = preparerVoix;
+    $("vx-enreg").onclick = async () => {
+      const details = { part_parlee: String(r.partParlee), variation_db: r.variationDb.toFixed(1), duree_s: r.dureeS.toFixed(1), appareil: "PC" };
+      try {
+        await ajouter("t_suivi_mesures", { id_mesure: nouvelId(), id_suivi: suiviVoix().id_suivi, dat_mesure: maintenantIso(),
+          valeur: Math.round(r.niveauDb * 10) / 10, details: JSON.stringify(details), commentaire: "Micro du PC", dat_saisie: maintenantIso() });
+        message("🎙️ Test enregistré — le téléphone le reprendra au prochain rattrapage.");
+        preparerVoix();
+      } catch (e) { message("Enregistrement impossible : " + e.message, true); }
+    };
+  }
+}
+
+// ============================================================================
+// Onglets et connexion
+// ============================================================================
+function ouvrir(onglet) {
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("actif", b.dataset.onglet === onglet));
+  ["journee", "soins", "evenements", "nettoyage", "fiches", "frappe", "referentiels", "connexion"].forEach(id => $(id).classList.toggle("cache", id !== onglet));
+  if (onglet === "frappe") { preparerFrappe(); preparerVoix(); } else arreterVoix();
+  document.body.classList.toggle("large", onglet === "journee" || onglet === "soins");
+  if (onglet === "soins" && S.refs && !SO.d) chargerSoins();
+  if (onglet === "journee" && S.refs && !J.jour) chargerJournee();
+  if (onglet === "fiches") afficherFiches().catch(e => message(e.message, true));
+  if (onglet === "referentiels" && S.refs && !RF.table) chargerRef();
+  try { localStorage.setItem("mypark_atelier_onglet", onglet); } catch (e) {}
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => ouvrir(b.dataset.onglet));
+
+function lireAdresse() { S.url = $("cx-url").value.trim(); S.cle = $("cx-cle").value.trim(); stocke("url", S.url); stocke("cle", S.cle); }
+
+/** Patients accessibles à ce compte (f_mes_patients) → liste « Patient ». */
+async function listerPatients() {
+  const ids = await api("rpc/f_mes_patients", { method: "POST", body: "{}" });
+  const choix = lu("user");
+  $("cx-user").innerHTML = (ids || []).map(id => `<option ${id === choix ? "selected" : ""}>${esc(id)}</option>`).join("");
+  $("cx-etat").textContent = ids && ids.length ? "Compte connecté." : "Ce compte n'a accès à aucun patient (connectez-vous d'abord une fois dans l'app).";
+  return ids || [];
+}
+
+$("cx-code-envoi").onclick = async () => {
+  lireAdresse();
+  const mail = $("cx-mail").value.trim().toLowerCase(); stocke("mail", mail);
+  try { await auth("otp", { email: mail, create_user: false }); message("Code envoyé à " + mail); }
+  catch (e) { message("Envoi impossible : " + e.message, true); }
+};
+$("cx-code-ok").onclick = async () => {
+  lireAdresse();
+  try {
+    garderSession(await auth("verify", { type: "email", email: $("cx-mail").value.trim().toLowerCase(), token: $("cx-code").value.trim() }));
+    $("cx-code").value = "";
+    if ((await listerPatients()).length) connecter();
+  } catch (e) {
+    // Code refusé (déjà utilisé, remplacé par un plus récent, expiré) : si la session gardée est encore bonne, rien de grave
+    const dejaConnecte = (S.jeton || S.relance) && await listerPatients().then(l => l.length > 0).catch(() => false);
+    if (dejaConnecte) { $("cx-code").value = ""; message("Vous êtes déjà connecté : pas besoin de code. Ouverture…"); connecter(); }
+    else message("Code refusé : seul le DERNIER code reçu marche, une seule fois et pendant quelques minutes. Redemandez-en un.", true);
+  }
+};
+$("cx-sortir").onclick = () => {
+  garderSession({ access_token: "", refresh_token: "" });
+  S.refs = null; $("cx-user").innerHTML = ""; $("cx-etat").textContent = "Déconnecté."; ouvrir("connexion");
+};
+
+async function connecter() {
+  lireAdresse(); S.user = $("cx-user").value;
+  if (!S.url || !S.cle || !S.jeton || !S.user) { ouvrir("connexion"); return; }
+  try {
+    await chargerRefs();
+    stocke("user", S.user);
+    message(`Connecté — ${S.refs.fiches.length} fiches de symptômes, ${S.refs.meds.length} médicaments.`);
+    if (!$("connexion").classList.contains("cache")) {
+      // Retour au dernier onglet utilisé (la Journée, le plus souvent)
+      let dernier = "evenements";
+      try { dernier = localStorage.getItem("mypark_atelier_onglet") || dernier; } catch (e) {}
+      ouvrir(dernier === "connexion" || !$(dernier) ? "evenements" : dernier);
+    }
+    chargerEvenements();
+    if (!$("journee").classList.contains("cache") && !J.jour) chargerJournee();
+  } catch (e) { S.refs = null; ouvrir("connexion"); message("Connexion impossible : " + e.message, true); }
+}
+$("cx-ok").onclick = connecter;
+
+$("cx-url").value = lu("url"); $("cx-cle").value = lu("cle"); $("cx-mail").value = lu("mail");
+S.jeton = lu("jeton"); S.relance = lu("relance");
+$("ev-du").value = $("ev-au").value = $("jr-jour").value = jourLocal(new Date());
+(async () => {
+  lireAdresse();
+  if (S.url && S.cle && (S.jeton || S.relance)) {
+    try { if (!S.jeton) await relancer(); if ((await listerPatients()).length) return connecter(); } catch (e) {}
+  }
+  ouvrir("connexion");
+})();
+</script>
+</body>
+</html>
